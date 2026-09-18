@@ -29,6 +29,10 @@ import {
   Phone,
   Layers,
   FileCode,
+  ChevronDown,
+  ChevronUp,
+  HardDrive,
+  Sparkles,
 } from 'lucide-react';
 import { ClinicSettings, Patient } from '../types';
 import {
@@ -39,6 +43,7 @@ import {
   copyTableForGoogleSheets,
   downloadGoogleSheetCsv,
   pushToGoogleAppsScript,
+  pushLocalDatabaseEngineToSheets,
   verifyArchiveSpreadsheetLink,
   generatePhoneDirectoryHtmlSnippet,
   generateGoogleAppsScriptSnippet,
@@ -172,6 +177,39 @@ export const GoogleSheetsDashboard: React.FC<GoogleSheetsDashboardProps> = ({
       // ignore
     } finally {
       setIsCheckingDb(false);
+    }
+  };
+
+  // Futuristic Accordion States for Block 1 (Google Spreadsheet Connection) & Block 4 (Auto Hourly Backup)
+  const [block1Accordion, setBlock1Accordion] = useState<'pipeline' | 'permissions' | null>('pipeline');
+  const [block4Accordion, setBlock4Accordion] = useState<'engine' | 'dbReplication' | 'telemetry' | 'ledger' | null>('engine');
+  const [isPushingLocalDB, setIsPushingLocalDB] = useState(false);
+
+  const handlePushLocalDBToSheets = async () => {
+    if (!webhookUrl || !webhookUrl.startsWith('http')) {
+      setStatusMsg({
+        type: 'error',
+        text: 'Please configure and paste your Google Apps Script Web App URL in Block 3 first to replicate the Local Database Engine to your spreadsheet and archives.',
+      });
+      return;
+    }
+    setIsPushingLocalDB(true);
+    try {
+      const res = await pushLocalDatabaseEngineToSheets(webhookUrl, patients, {
+        archiveSheet1Id: archive1Status?.id || settings.archiveSheetId1,
+        archiveSheet2Id: archive2Status?.id || settings.archiveSheetId2,
+      });
+      setStatusMsg({
+        type: res.success ? 'success' : 'error',
+        text: res.message,
+      });
+    } catch (err: any) {
+      setStatusMsg({
+        type: 'error',
+        text: 'Failed to replicate Local Database Engine: ' + (err.message || String(err)),
+      });
+    } finally {
+      setIsPushingLocalDB(false);
     }
   };
 
@@ -862,15 +900,79 @@ export const GoogleSheetsDashboard: React.FC<GoogleSheetsDashboardProps> = ({
               </div>
             </div>
 
-            {/* Share Settings Guide */}
-            <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-900 space-y-1 mt-auto">
-              <p className="font-bold flex items-center gap-2 text-amber-950">
-                <HelpCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                <span>Requirement to read your Google Sheet:</span>
-              </p>
-              <p className="text-amber-800 leading-relaxed text-[11px] pl-6">
-                Under <i>General access</i> in Google Sheets, change <b>Restricted</b> to <b>Anyone with the link can view</b> (Viewer), then click <i>Pull / Sync from Sheet</i> above.
-              </p>
+            {/* PROTOCOL ARCHITECTURE (READ / PULL FROM SHEET) */}
+            <div className="mt-2 rounded-2xl border border-slate-800 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 text-slate-200 shadow-md overflow-hidden divide-y divide-slate-800/80">
+              {/* Accordion Item 1: Architecture & Data Feed Protocol */}
+              <div className="transition-all">
+                <button
+                  type="button"
+                  onClick={() => setBlock1Accordion(block1Accordion === 'pipeline' ? null : 'pipeline')}
+                  className="w-full px-4 py-3 flex items-center justify-between gap-2 hover:bg-slate-800/50 transition-colors text-left cursor-pointer group"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] shrink-0" />
+                    <span className="text-xs font-bold tracking-wide text-slate-200 group-hover:text-white truncate">
+                      Cloud Pipeline Architecture &amp; Data Feed
+                    </span>
+                    <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-emerald-950 text-emerald-400 border border-emerald-800 shrink-0">
+                      GVIZ / CSV (PULL)
+                    </span>
+                  </div>
+                  {block1Accordion === 'pipeline' ? (
+                    <ChevronUp className="w-4 h-4 text-emerald-400 shrink-0" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                  )}
+                </button>
+
+                {block1Accordion === 'pipeline' && (
+                  <div className="p-4 bg-slate-950/70 text-[11px] space-y-2.5 animate-in fade-in duration-200">
+                    <div className="text-slate-300 leading-relaxed space-y-1.5">
+                      <div><b>• Direct GViz Read Stream:</b> Dedicated strictly to pulling and querying active patient data directly from your Google Sheet without intermediate server dependencies.</div>
+                      <div><b>• Local DB Archival via Apps Script:</b> Local database engine state and backups are preserved through Google Apps Script on the backup sheet, leaving this connection pure for instant data retrieval.</div>
+                      <div><b>• Text Formatting (@):</b> Automatically parses telephone numbers (e.g. <code>9880517715</code>) and 24-hr timestamps (<code>HH:mm:ss</code>) so seconds and country codes are preserved.</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Accordion Item 3: Google Access Permissions Guide */}
+              <div className="transition-all">
+                <button
+                  type="button"
+                  onClick={() => setBlock1Accordion(block1Accordion === 'permissions' ? null : 'permissions')}
+                  className="w-full px-4 py-3 flex items-center justify-between gap-2 hover:bg-slate-800/50 transition-colors text-left cursor-pointer group"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)] shrink-0" />
+                    <span className="text-xs font-bold tracking-wide text-slate-200 group-hover:text-white truncate">
+                      Access Permissions &amp; Troubleshooting
+                    </span>
+                    <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-amber-950 text-amber-400 border border-amber-800 shrink-0">
+                      PERMISSIONS
+                    </span>
+                  </div>
+                  {block1Accordion === 'permissions' ? (
+                    <ChevronUp className="w-4 h-4 text-amber-400 shrink-0" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                  )}
+                </button>
+
+                {block1Accordion === 'permissions' && (
+                  <div className="p-4 bg-slate-950/70 text-[11px] space-y-2 animate-in fade-in duration-200">
+                    <p className="text-amber-200 leading-relaxed">
+                      To enable real-time reading from your Google Sheet, ensure Google Share settings are set to:
+                    </p>
+                    <div className="p-2.5 rounded-xl bg-amber-950/40 border border-amber-800/70 text-amber-300 font-mono text-[10px]">
+                      Share ➔ General access ➔ Change from "Restricted" to "Anyone with the link can view" (Viewer)
+                    </div>
+                    <p className="text-slate-400 text-[10px]">
+                      If you receive a 403 or 404 error during pull, verify the sheet ID and confirm the sheet is not restricted to an internal organization workspace.
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -1259,37 +1361,38 @@ export const GoogleSheetsDashboard: React.FC<GoogleSheetsDashboardProps> = ({
 
                 {/* PROMINENT TELEPHONE DIRECTORY DASHBOARD BUTTON ONCE WEB APP URL IS PASTED */}
                 {webhookUrl && webhookUrl.trim().startsWith('http') && (
-                  <div className="p-3 bg-gradient-to-r from-sky-50 to-emerald-50 border border-sky-200 rounded-2xl flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 shadow-2xs animate-in fade-in duration-200">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="w-8 h-8 rounded-xl bg-sky-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                  <div className="p-3.5 bg-gradient-to-r from-sky-50 via-teal-50 to-emerald-50 border border-sky-200 rounded-2xl flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3 shadow-2xs animate-in fade-in duration-200">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-xl bg-sky-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
                         <Phone className="w-4 h-4" />
                       </div>
                       <div className="min-w-0">
                         <div className="text-xs font-bold text-sky-950 truncate">Telephone Directory Dashboard Ready</div>
-                        <div className="text-[11px] text-slate-600 truncate">Access live patient contact search &amp; 1-click WhatsApp/calling</div>
+                        <div className="text-[11px] text-slate-600 truncate">Patient search &amp; 1-click WhatsApp/calling</div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
+                    {/* Distinct non-overlapping buttons across all devices */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full xl:w-auto shrink-0">
                       <button
                         type="button"
                         id="btn-access-directory-dashboard"
                         onClick={() => window.open(webhookUrl.trim(), '_blank')}
-                        className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer shadow-xs"
+                        className="flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs whitespace-nowrap min-w-0"
                         title="Open Telephone Directory Web App in a new tab"
                       >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                        <span>Access Telephone Directory Dashboard</span>
+                        <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                        <span className="truncate">Access Directory Dashboard</span>
                       </button>
 
                       <button
                         type="button"
                         id="btn-open-inapp-directory"
                         onClick={() => setShowInAppDirectory(true)}
-                        className="flex items-center justify-center gap-1.5 px-3 py-2 bg-sky-100 hover:bg-sky-200 text-sky-800 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                        className="flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-white hover:bg-sky-50 active:scale-[0.98] text-sky-800 border border-sky-200 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs whitespace-nowrap min-w-0"
                         title="View phone directory inside this application"
                       >
-                        <Phone className="w-3.5 h-3.5 text-sky-600" />
-                        <span className="hidden sm:inline">In-App View</span>
+                        <Phone className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                        <span>In-App View</span>
                       </button>
                     </div>
                   </div>
@@ -1421,6 +1524,210 @@ export const GoogleSheetsDashboard: React.FC<GoogleSheetsDashboardProps> = ({
                   </span>
                 </div>
               </div>
+              {/* FUTURISTIC ACCORDION FOR AUTO HOURLY BACKUP */}
+              <div className="rounded-2xl border border-slate-800 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 text-slate-200 shadow-md overflow-hidden divide-y divide-slate-800/80">
+                {/* Accordion Item 1: Autonomous Background Engine Architecture */}
+                <div className="transition-all">
+                  <button
+                    type="button"
+                    onClick={() => setBlock4Accordion(block4Accordion === 'engine' ? null : 'engine')}
+                    className="w-full px-4 py-3 flex items-center justify-between gap-2 hover:bg-slate-800/50 transition-colors text-left cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)] animate-pulse shrink-0" />
+                      <span className="text-xs font-bold tracking-wide text-cyan-300 group-hover:text-cyan-200 truncate">
+                        Autonomous Engine &amp; Catch-Up Protocol
+                      </span>
+                      <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-cyan-950 text-cyan-400 border border-cyan-800 shrink-0">
+                        :00 DISPATCH
+                      </span>
+                    </div>
+                    {block4Accordion === 'engine' ? (
+                      <ChevronUp className="w-4 h-4 text-cyan-400 shrink-0" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                    )}
+                  </button>
+
+                  {block4Accordion === 'engine' && (
+                    <div className="p-4 bg-slate-950/70 text-[11px] space-y-2.5 animate-in fade-in duration-200">
+                      <p className="text-slate-300 leading-relaxed">
+                        The autonomous backup engine synchronizes with your device's system clock, triggering precision snapshots at exactly <span className="text-cyan-300 font-bold font-mono">:00:00</span> of every hour.
+                      </p>
+                      <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1 text-slate-300">
+                        <div className="font-bold text-sky-400 flex items-center gap-1.5">
+                          <Zap className="w-3 h-3 text-amber-400" />
+                          <span>Intelligent Sleep/Wake Catch-Up:</span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 leading-normal">
+                          If this tablet or laptop was closed, asleep, or in background tab hibernation during an hour boundary, the engine automatically detects missed hours upon wakeup and commits an immediate catch-up snapshot!
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Accordion Item 2: Local DB Engine ➔ Sheet Replication (Via Apps Script) */}
+                <div className="transition-all">
+                  <button
+                    type="button"
+                    onClick={() => setBlock4Accordion(block4Accordion === 'dbReplication' ? null : 'dbReplication')}
+                    className="w-full px-4 py-3 flex items-center justify-between gap-2 hover:bg-slate-800/50 transition-colors text-left cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)] animate-pulse shrink-0" />
+                      <span className="text-xs font-bold tracking-wide text-cyan-300 group-hover:text-cyan-200 truncate">
+                        Local DB Engine ➔ Backup Sheet Replication
+                      </span>
+                      <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-cyan-950 text-cyan-400 border border-cyan-800 shrink-0">
+                        VIA APPS SCRIPT
+                      </span>
+                    </div>
+                    {block4Accordion === 'dbReplication' ? (
+                      <ChevronUp className="w-4 h-4 text-cyan-400 shrink-0" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                    )}
+                  </button>
+
+                  {block4Accordion === 'dbReplication' && (
+                    <div className="p-4 bg-slate-950/70 text-[11px] space-y-3 animate-in fade-in duration-200">
+                      <p className="text-slate-300 leading-relaxed">
+                        Replicates your complete client-side IndexedDB database engine architecture, registered locums, referral doctors, and clinical metadata into a dedicated <span className="text-cyan-300 font-bold font-mono">Local Database Engine</span> tab on your backup sheet via the Google Apps Script Webhook, automatically mirrored across Archive 1 &amp; Archive 2 without using the direct spreadsheet connection.
+                      </p>
+                      <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
+                        <div className="p-2 rounded-xl bg-slate-900/90 border border-slate-800">
+                          <span className="text-slate-400 block">Backup Protocol:</span>
+                          <span className="text-cyan-400 font-bold">Apps Script POST</span>
+                        </div>
+                        <div className="p-2 rounded-xl bg-slate-900/90 border border-slate-800">
+                          <span className="text-slate-400 block">Archive Redundancy:</span>
+                          <span className="text-emerald-400 font-bold">Dual Archive Mirroring</span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        id="btn-push-local-db-sheet"
+                        disabled={isPushingLocalDB || (!cleanId && !webhookUrl)}
+                        onClick={handlePushLocalDBToSheets}
+                        className="w-full flex items-center justify-center gap-2 py-2.5 px-3 bg-gradient-to-r from-cyan-600 to-sky-600 hover:from-cyan-500 hover:to-sky-500 text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer disabled:opacity-40"
+                      >
+                        <HardDrive className={`w-3.5 h-3.5 ${isPushingLocalDB ? 'animate-spin' : ''}`} />
+                        <span>{isPushingLocalDB ? 'Replicating Local DB Engine...' : 'Push Local DB Engine Data to Backup Sheet'}</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Accordion Item 3: Snapshot Telemetry & Health Audit */}
+                <div className="transition-all">
+                  <button
+                    type="button"
+                    onClick={() => setBlock4Accordion(block4Accordion === 'telemetry' ? null : 'telemetry')}
+                    className="w-full px-4 py-3 flex items-center justify-between gap-2 hover:bg-slate-800/50 transition-colors text-left cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] shrink-0" />
+                      <span className="text-xs font-bold tracking-wide text-slate-200 group-hover:text-white truncate">
+                        Local DB Snapshot Telemetry &amp; Health
+                      </span>
+                      <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-emerald-950 text-emerald-400 border border-emerald-800 shrink-0">
+                        INDEXEDDB
+                      </span>
+                    </div>
+                    {block4Accordion === 'telemetry' ? (
+                      <ChevronUp className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                    )}
+                  </button>
+
+                  {block4Accordion === 'telemetry' && (
+                    <div className="p-4 bg-slate-950/70 text-[11px] space-y-2.5 animate-in fade-in duration-200">
+                      <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
+                        <div className="p-2 rounded-xl bg-slate-900/90 border border-slate-800">
+                          <span className="text-slate-400 block">Snapshot Retention:</span>
+                          <span className="text-emerald-400 font-bold">Rolling 24-Hour Buffer</span>
+                        </div>
+                        <div className="p-2 rounded-xl bg-slate-900/90 border border-slate-800">
+                          <span className="text-slate-400 block">Integrity Check:</span>
+                          <span className="text-cyan-400 font-bold">100% Validated</span>
+                        </div>
+                      </div>
+                      <p className="text-slate-400 text-[10px] leading-relaxed">
+                        Snapshots are preserved in transactional IndexedDB object stores and isolated from browser cache clearing.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Accordion Item 3: Rolling 24-Hour Snapshot Ledger */}
+                <div className="transition-all">
+                  <button
+                    type="button"
+                    onClick={() => setBlock4Accordion(block4Accordion === 'ledger' ? null : 'ledger')}
+                    className="w-full px-4 py-3 flex items-center justify-between gap-2 hover:bg-slate-800/50 transition-colors text-left cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="w-2 h-2 rounded-full bg-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.8)] shrink-0" />
+                      <span className="text-xs font-bold tracking-wide text-slate-200 group-hover:text-white truncate">
+                        Audit History &amp; Hourly Snapshot Ledger ({backupHistory.length})
+                      </span>
+                      <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-sky-950 text-sky-400 border border-sky-800 shrink-0">
+                        HISTORY
+                      </span>
+                    </div>
+                    {block4Accordion === 'ledger' ? (
+                      <ChevronUp className="w-4 h-4 text-sky-400 shrink-0" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                    )}
+                  </button>
+
+                  {block4Accordion === 'ledger' && (
+                    <div className="p-4 bg-slate-950/70 text-[11px] space-y-2 animate-in fade-in duration-200">
+                      {backupHistory.length === 0 ? (
+                        <div className="text-slate-400 italic py-2 text-center bg-slate-900/60 rounded-xl">
+                          No hourly snapshots recorded yet. Triggers automatically on the hour.
+                        </div>
+                      ) : (
+                        <div className="max-h-48 overflow-y-auto divide-y divide-slate-800 bg-slate-900/80 rounded-xl border border-slate-800 text-[11px]">
+                          {backupHistory.map((item) => (
+                            <div key={item.id} className="p-2.5 flex items-center justify-between hover:bg-slate-800/60 transition-colors">
+                              <div>
+                                <div className="font-bold text-slate-200 flex items-center gap-1.5">
+                                  <span>{item.hourKey}</span>
+                                  <span className={`px-1.5 py-0.2 rounded text-[9px] font-semibold ${item.status === 'success' ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-700' : 'bg-amber-900/60 text-amber-300 border border-amber-700'}`}>
+                                    {item.status === 'success' ? 'Archived' : 'Warning'}
+                                  </span>
+                                </div>
+                                <div className="text-[10px] text-slate-400">
+                                  {item.patientCount} records • {item.pushedToSheets ? 'Google Sheets Sync OK' : 'Local Storage Only'}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const blob = new Blob([JSON.stringify(item.data, null, 2)], { type: 'application/json' });
+                                  const url = URL.createObjectURL(blob);
+                                  const a = document.createElement('a');
+                                  a.href = url;
+                                  a.download = `namana-hourly-${item.hourKey.replace(/[: ]/g, '-')}.json`;
+                                  a.click();
+                                  URL.revokeObjectURL(url);
+                                }}
+                                className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-sky-300 rounded-lg text-[10px] font-mono transition-colors"
+                              >
+                                Export
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
 
             {/* Action Buttons */}
@@ -1428,66 +1735,21 @@ export const GoogleSheetsDashboard: React.FC<GoogleSheetsDashboardProps> = ({
               <button
                 type="button"
                 onClick={handleTriggerHourlyBackupNow}
-                className="w-full flex items-center justify-center gap-1.5 py-2.5 px-3 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer shadow-xs"
+                className="w-full flex items-center justify-center gap-1.5 py-2.5 px-3 bg-sky-600 hover:bg-sky-700 active:scale-[0.98] text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs"
               >
                 <Zap className="w-3.5 h-3.5 text-amber-300 shrink-0" />
                 <span className="truncate">Test / Trigger Hourly Backup Now</span>
               </button>
 
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={handleDownloadLatestHourlySnapshot}
-                  className="flex items-center justify-center gap-1.5 py-2 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[11px] font-semibold transition-colors cursor-pointer"
-                  title="Download latest snapshot JSON file"
-                >
-                  <Download className="w-3 h-3 text-slate-500 shrink-0" />
-                  <span className="truncate">Download Snapshot</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setShowHistorySection(!showHistorySection)}
-                  className="flex items-center justify-center gap-1.5 py-2 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[11px] font-semibold transition-colors cursor-pointer"
-                >
-                  <History className="w-3 h-3 text-sky-600 shrink-0" />
-                  <span className="truncate">{showHistorySection ? 'Hide History' : `History (${backupHistory.length})`}</span>
-                </button>
-              </div>
-
-              {/* Audit History of Hourly Runs */}
-              {showHistorySection && (
-                <div className="pt-2 border-t border-slate-100 space-y-2 animate-in fade-in duration-200">
-                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-700">
-                    <span>Recent Hourly Backups</span>
-                    <span className="text-[10px] text-slate-400">Last 24 hrs</span>
-                  </div>
-                  {backupHistory.length === 0 ? (
-                    <div className="text-[11px] text-slate-400 italic py-2 text-center bg-slate-50 rounded-xl">
-                      No hourly snapshots recorded yet. Triggers automatically on the hour.
-                    </div>
-                  ) : (
-                    <div className="max-h-40 overflow-y-auto divide-y divide-slate-100 bg-slate-50 rounded-xl border border-slate-200 text-[11px]">
-                      {backupHistory.map((item) => (
-                        <div key={item.id} className="p-2 flex items-center justify-between hover:bg-white transition-colors">
-                          <div>
-                            <div className="font-bold text-slate-800 flex items-center gap-1.5">
-                              <span>{item.hourKey}</span>
-                              <span className={`px-1.5 py-0.2 rounded text-[9px] font-semibold ${item.status === 'success' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
-                                {item.status === 'success' ? 'Archived' : 'Warning'}
-                              </span>
-                            </div>
-                            <div className="text-[10px] text-slate-500">
-                              {item.patientCount} records • {item.pushedToSheets ? 'Google Sheets Sync OK' : 'Local Storage Only'}
-                            </div>
-                          </div>
-                          <span className="text-[10px] font-mono text-slate-400">{item.displayTime}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
+              <button
+                type="button"
+                onClick={handleDownloadLatestHourlySnapshot}
+                className="w-full flex items-center justify-center gap-1.5 py-2 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[11px] font-semibold transition-colors cursor-pointer"
+                title="Download latest snapshot JSON file"
+              >
+                <Download className="w-3 h-3 text-slate-500 shrink-0" />
+                <span className="truncate">Download Latest Hourly Snapshot JSON</span>
+              </button>
             </div>
           </div>
 

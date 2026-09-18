@@ -419,6 +419,31 @@ class LocalDatabaseManager {
   }
 
   /**
+   * Retrieves Referral Doctors from IndexedDB
+   */
+  public async getReferralDoctors(): Promise<string[]> {
+    const db = await this.getDB();
+    if (!db) return [];
+
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction('referralDoctors', 'readonly');
+        const store = tx.objectStore('referralDoctors');
+        const req = store.getAll();
+        req.onsuccess = () => {
+          const list = Array.isArray(req.result)
+            ? req.result.map((r: any) => (typeof r === 'string' ? r : r.name)).filter(Boolean)
+            : [];
+          resolve(list);
+        };
+        req.onerror = () => resolve([]);
+      } catch {
+        resolve([]);
+      }
+    });
+  }
+
+  /**
    * Saves Clinic Settings into IndexedDB
    */
   public async saveClinicSettings(settings: ClinicSettings): Promise<boolean> {

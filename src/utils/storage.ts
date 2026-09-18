@@ -157,7 +157,8 @@ export function getNextMonthlySerial(dateStr: string, existingPatients: Patient[
 }
 
 export function createNewPatient(nextSerial: number, existingPatients: Patient[] = []): Patient {
-  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
   const monthlySeq = getNextMonthlySerial(today, existingPatients);
   const regNo = formatPatientId(today, monthlySeq);
 
@@ -166,6 +167,7 @@ export function createNewPatient(nextSerial: number, existingPatients: Patient[]
     serial: monthlySeq,
     regNo,
     date: today,
+    time: formatTime24Hour(now),
     name: '',
     age: '',
     sex: 'Male',
@@ -189,6 +191,7 @@ export function createNewPatient(nextSerial: number, existingPatients: Patient[]
     visitType: 'Clinic',
     followUps: [],
     createdAt: Date.now(),
+    updatedAt: Date.now(),
   };
 }
 
@@ -229,14 +232,22 @@ export function formatTime24Hour(input?: Date | string | number): string {
       return trimmed;
     }
 
-    // 24-hour HH:MM
+    // 24-hour HH:MM -> append :00
     if (/^([01]\d|2[0-3]):[0-5]\d$/.test(trimmed)) {
       return `${trimmed}:00`;
     }
 
+    // ISO string with T (e.g. 2026-09-18T14:35:20.000Z)
+    if (trimmed.includes('T')) {
+      const timePart = trimmed.split('T')[1].replace(/Z$/i, '').split('.')[0];
+      if (/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(timePart)) {
+        return timePart;
+      }
+    }
+
     // Try parsing as date string
     const parsed = new Date(trimmed);
-    if (!isNaN(parsed.getTime())) {
+    if (!isNaN(parsed.getTime()) && parsed.getFullYear() > 2000) {
       const hh = String(parsed.getHours()).padStart(2, '0');
       const mm = String(parsed.getMinutes()).padStart(2, '0');
       const ss = String(parsed.getSeconds()).padStart(2, '0');
@@ -268,36 +279,25 @@ export function formatTime24Hour(input?: Date | string | number): string {
 /**
  * Splits and sanitizes date strings that may contain raw ISO timestamps (e.g. 2026-09-03T18:30:00.000Z)
  * into a clean YYYY-MM-DD date and a separate 24-hour HH:MM:SS time string.
- * Strictly avoids static "10:00:00" defaults, producing real 24-hour HH:MM:SS format.
+ * Strictly avoids static "10:00:00" defaults, producing real-world 24-hour HH:MM:SS timestamps.
  */
 export function parseDateAndTimestamp(
   dateStr?: string,
   timeStr?: string,
-  fallbackTimestamp?: Date | number | string
+  fallbackTimestamp?: Date | number | string,
+  recordId?: string
 ): { cleanDate: string; cleanTime: string } {
-  const current24Hour = formatTime24Hour(fallbackTimestamp);
-
-  if (!dateStr || typeof dateStr !== 'string') {
-    const now = new Date();
-    return {
-      cleanDate: now.toISOString().slice(0, 10),
-      cleanTime: timeStr ? formatTime24Hour(timeStr) : current24Hour,
-    };
-  }
-
-  let cleanDate = dateStr.trim();
-  let extractedTime = timeStr ? timeStr.trim() : '';
+  let cleanDate = dateStr && typeof dateStr === 'string' ? dateStr.trim() : new Date().toISOString().slice(0, 10);
+  let extractedTime = timeStr ? String(timeStr).trim() : '';
 
   if (cleanDate.includes('T')) {
     const parts = cleanDate.split('T');
     cleanDate = parts[0];
     if (!extractedTime && parts[1]) {
-      // Remove trailing 'Z' or milliseconds: 18:30:00.000Z -> 18:30:00
       extractedTime = parts[1].replace(/Z$/i, '').split('.')[0];
     }
   }
 
-  // If dateStr contains space separated date & time: "2026-09-03 18:30:00"
   if (cleanDate.includes(' ')) {
     const parts = cleanDate.split(' ');
     cleanDate = parts[0];
@@ -306,10 +306,35 @@ export function parseDateAndTimestamp(
     }
   }
 
-  // If time was missing or equals legacy static placeholder "10:00" / "10:00:00",
-  // replace with actual 24-hour time HH:MM:SS
-  if (!extractedTime || extractedTime === '10:00:00' || extractedTime === '10:00') {
-    extractedTime = current24Hour;
+  // Check if extracted time is empty or legacy dummy placeholder "10:00" / "10:00:00"
+  const isDummy10 = (
+    !extractedTime ||
+    extractedTime === '10:00:00' ||
+    extractedTime === '10:00' ||
+    extractedTime === '10:00 AM' ||
+    extractedTime === '10:00:00 AM' ||
+    extractedTime === '10:00:00 am' ||
+    extractedTime === '10:00 am'
+  );
+
+  if (isDummy10) {
+    let resolvedTime = '';
+    // 1. Try to extract from fallbackTimestamp if it's a real timestamp and not dummy 10:00
+    if (fallbackTimestamp) {
+      const fbStr = formatTime24Hour(fallbackTimestamp);
+      if (fbStr !== '10:00:00' && fbStr !== '10:00') {
+        resolvedTime = fbStr;
+      }
+    }
+    // 2. Try to extract epoch millisecond timestamp from recordId (e.g. p_1726668123456_abc or fu_1726668123456)
+    if (!resolvedTime && recordId) {
+      const match = recordId.match(/(?:p_|fu_)?(\d{13})/);
+      if (match) {
+        resolvedTime = formatTime24Hour(parseInt(match[1], 10));
+      }
+    }
+    // 3. Fallback to current real-world 24-hour time
+    extractedTime = resolvedTime || formatTime24Hour();
   } else {
     extractedTime = formatTime24Hour(extractedTime);
   }
@@ -377,7 +402,12 @@ export function deduplicatePatients(list: Patient[]): Patient[] {
     if (seenIds.has(p.id)) continue;
 
     // Ensure clean date and separated time stamp (no raw ISO timestamps in date)
-    const { cleanDate, cleanTime } = parseDateAndTimestamp(p.date, p.time, p.updatedAt || p.createdAt);
+    const { cleanDate, cleanTime } = parseDateAndTimestamp(
+      p.date,
+      p.time,
+      p.createdAt || p.updatedAt,
+      p.id
+    );
 
     // Ensure a valid name is present
     let patientName = (p.name || '').trim();
@@ -427,10 +457,16 @@ export function deduplicatePatients(list: Patient[]): Patient[] {
 
     // Deep sanitize every follow-up visit preserving all fields
     const sanitizedFollowUps = (Array.isArray(p.followUps) ? p.followUps : []).map((fu, fuIdx) => {
-      const fuDt = parseDateAndTimestamp(fu.date, fu.time, fu.updatedAt || fu.createdAt || p.updatedAt || p.createdAt);
+      const fuId = fu.id || `fu_${p.id}_${fuIdx + 1}`;
+      const fuDt = parseDateAndTimestamp(
+        fu.date,
+        fu.time,
+        fu.createdAt || fu.updatedAt || p.createdAt || p.updatedAt,
+        fuId
+      );
       return {
         ...fu,
-        id: fu.id || `fu_${p.id}_${fuIdx + 1}`,
+        id: fuId,
         date: fuDt.cleanDate,
         time: fuDt.cleanTime,
         notes: fu.notes || `Session #${fuIdx + 1}`,

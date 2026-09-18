@@ -112,33 +112,33 @@ export const PainScaleComponent: React.FC<PainScaleProps> = ({
         </span>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 sm:gap-4">
         {/* Pain BEFORE Treatment */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-              <span>{labelBefore}</span>
+        <div className="space-y-2 bg-white/70 p-2.5 sm:p-3 rounded-xl border border-slate-200/70 shadow-2xs">
+          <div className="flex items-center justify-between gap-1.5">
+            <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5 min-w-0">
+              <span className="truncate">{labelBefore}</span>
               {numBefore !== undefined && (
-                <span className="text-[11px] font-extrabold px-2 py-0.5 rounded-md bg-white border border-slate-300 shadow-2xs font-mono">
+                <span className="text-[11px] font-extrabold px-1.5 py-0.5 rounded-md bg-white border border-slate-300 shadow-2xs font-mono shrink-0">
                   {numBefore}/10
                 </span>
               )}
             </label>
             {numBefore !== undefined && (
-              <span className={`text-[11px] font-bold px-2 py-0.5 rounded-lg border ${getPainSeverityInfo(numBefore).bg} ${getPainSeverityInfo(numBefore).color} ${getPainSeverityInfo(numBefore).border}`}>
+              <span className={`text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-lg border shrink-0 ${getPainSeverityInfo(numBefore).bg} ${getPainSeverityInfo(numBefore).color} ${getPainSeverityInfo(numBefore).border}`}>
                 {getPainSeverityInfo(numBefore).emoji} {getPainSeverityInfo(numBefore).label}
               </span>
             )}
           </div>
 
-          <div className="grid grid-cols-11 gap-1">
+          <div className="grid grid-cols-11 gap-1 w-full">
             {scores.map((s) => (
               <button
                 type="button"
                 key={`before-${s}`}
                 disabled={disabled}
                 onClick={() => onChangeBefore(s)}
-                className={`h-9 rounded-lg border text-xs font-bold transition-all cursor-pointer flex items-center justify-center ${getButtonClass(s, numBefore)} disabled:opacity-50`}
+                className={`h-8 sm:h-9 w-full rounded-lg border text-[11px] sm:text-xs font-bold transition-all cursor-pointer flex items-center justify-center ${getButtonClass(s, numBefore)} disabled:opacity-50`}
                 title={`Pain Score ${s}/10 - ${getPainSeverityInfo(s).label}`}
               >
                 {s}
@@ -148,31 +148,31 @@ export const PainScaleComponent: React.FC<PainScaleProps> = ({
         </div>
 
         {/* Pain AFTER Treatment */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-              <span>{labelAfter}</span>
+        <div className="space-y-2 bg-white/70 p-2.5 sm:p-3 rounded-xl border border-slate-200/70 shadow-2xs">
+          <div className="flex items-center justify-between gap-1.5">
+            <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5 min-w-0">
+              <span className="truncate">{labelAfter}</span>
               {numAfter !== undefined && (
-                <span className="text-[11px] font-extrabold px-2 py-0.5 rounded-md bg-white border border-slate-300 shadow-2xs font-mono">
+                <span className="text-[11px] font-extrabold px-1.5 py-0.5 rounded-md bg-white border border-slate-300 shadow-2xs font-mono shrink-0">
                   {numAfter}/10
                 </span>
               )}
             </label>
             {numAfter !== undefined && (
-              <span className={`text-[11px] font-bold px-2 py-0.5 rounded-lg border ${getPainSeverityInfo(numAfter).bg} ${getPainSeverityInfo(numAfter).color} ${getPainSeverityInfo(numAfter).border}`}>
+              <span className={`text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-lg border shrink-0 ${getPainSeverityInfo(numAfter).bg} ${getPainSeverityInfo(numAfter).color} ${getPainSeverityInfo(numAfter).border}`}>
                 {getPainSeverityInfo(numAfter).emoji} {getPainSeverityInfo(numAfter).label}
               </span>
             )}
           </div>
 
-          <div className="grid grid-cols-11 gap-1">
+          <div className="grid grid-cols-11 gap-1 w-full">
             {scores.map((s) => (
               <button
                 type="button"
                 key={`after-${s}`}
                 disabled={disabled}
                 onClick={() => onChangeAfter(s)}
-                className={`h-9 rounded-lg border text-xs font-bold transition-all cursor-pointer flex items-center justify-center ${getButtonClass(s, numAfter)} disabled:opacity-50`}
+                className={`h-8 sm:h-9 w-full rounded-lg border text-[11px] sm:text-xs font-bold transition-all cursor-pointer flex items-center justify-center ${getButtonClass(s, numAfter)} disabled:opacity-50`}
                 title={`Pain Score ${s}/10 - ${getPainSeverityInfo(s).label}`}
               >
                 {s}

@@ -614,28 +614,33 @@ export const PatientCaseSheet: React.FC<PatientCaseSheetProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+              {/* Row 1: Age, Sex, Height, Weight */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                 {/* Age */}
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">Age (Years)</label>
+                  <div className="h-5 flex items-center mb-1">
+                    <label className="block text-[11px] font-bold text-slate-600">Age (Years)</label>
+                  </div>
                   <input
                     type="number"
                     value={patient.age}
                     onChange={(e) => updateField('age', e.target.value)}
                     placeholder="e.g. 45"
                     disabled={isDeleted}
-                    className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-900 rounded-xl focus:border-sky-500 focus:ring-1 focus:ring-sky-200 outline-none font-semibold shadow-2xs"
+                    className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-900 rounded-xl focus:border-sky-500 focus:ring-1 focus:ring-sky-200 outline-none font-semibold shadow-2xs h-10"
                   />
                 </div>
 
                 {/* Sex */}
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">Sex</label>
+                  <div className="h-5 flex items-center mb-1">
+                    <label className="block text-[11px] font-bold text-slate-600">Sex</label>
+                  </div>
                   <select
                     value={patient.sex || 'Male'}
                     onChange={(e) => updateField('sex', e.target.value as any)}
                     disabled={isDeleted}
-                    className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-900 rounded-xl focus:border-sky-500 focus:ring-1 focus:ring-sky-200 outline-none font-semibold cursor-pointer shadow-2xs"
+                    className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-900 rounded-xl focus:border-sky-500 focus:ring-1 focus:ring-sky-200 outline-none font-semibold cursor-pointer shadow-2xs h-10"
                   >
                     <option value="Male">Male</option>
                     <option value="Female">Female</option>
@@ -645,7 +650,9 @@ export const PatientCaseSheet: React.FC<PatientCaseSheetProps> = ({
 
                 {/* Height */}
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">Height (e.g. 5'7")</label>
+                  <div className="h-5 flex items-center mb-1">
+                    <label className="block text-[11px] font-bold text-slate-600">Height (e.g. 5'7")</label>
+                  </div>
                   <input
                     type="text"
                     value={patient.height}
@@ -653,7 +660,7 @@ export const PatientCaseSheet: React.FC<PatientCaseSheetProps> = ({
                     placeholder="5'7&quot; or cm"
                     list="height-presets"
                     disabled={isDeleted}
-                    className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-900 rounded-xl focus:border-sky-500 focus:ring-1 focus:ring-sky-200 outline-none font-semibold shadow-2xs"
+                    className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-900 rounded-xl focus:border-sky-500 focus:ring-1 focus:ring-sky-200 outline-none font-semibold shadow-2xs h-10"
                   />
                   <datalist id="height-presets">
                     {HEIGHT_PRESETS.map((h) => (
@@ -664,25 +671,32 @@ export const PatientCaseSheet: React.FC<PatientCaseSheetProps> = ({
 
                 {/* Weight */}
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">Weight (kg)</label>
+                  <div className="h-5 flex items-center mb-1">
+                    <label className="block text-[11px] font-bold text-slate-600">Weight (kg)</label>
+                  </div>
                   <input
                     type="number"
                     value={patient.weight}
                     onChange={(e) => updateField('weight', e.target.value)}
                     placeholder="e.g. 68"
                     disabled={isDeleted}
-                    className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-900 rounded-xl focus:border-sky-500 focus:ring-1 focus:ring-sky-200 outline-none font-semibold shadow-2xs"
+                    className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-900 rounded-xl focus:border-sky-500 focus:ring-1 focus:ring-sky-200 outline-none font-semibold shadow-2xs h-10"
                   />
                 </div>
+              </div>
 
+              {/* Row 2: Blood Group, Contact Phone, Visit Type, Referred By (Unified Single Row in Tab & Desktop) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs items-end">
                 {/* Blood Group */}
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">Blood Group</label>
+                  <div className="h-5 flex items-center justify-between mb-1">
+                    <label className="block text-[11px] font-bold text-slate-600">Blood Group</label>
+                  </div>
                   <select
                     value={patient.bloodGroup || 'O+'}
                     onChange={(e) => updateField('bloodGroup', e.target.value)}
                     disabled={isDeleted}
-                    className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-900 rounded-xl focus:border-sky-500 focus:ring-1 focus:ring-sky-200 outline-none font-semibold cursor-pointer shadow-2xs"
+                    className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-900 rounded-xl focus:border-sky-500 focus:ring-1 focus:ring-sky-200 outline-none font-semibold cursor-pointer shadow-2xs h-10"
                   >
                     {BLOOD_GROUPS.map((bg) => (
                       <option key={bg} value={bg}>
@@ -694,8 +708,8 @@ export const PatientCaseSheet: React.FC<PatientCaseSheetProps> = ({
 
                 {/* Phone */}
                 <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-[11px] font-bold text-slate-600">Contact Phone</label>
+                  <div className="h-5 flex items-center justify-between mb-1">
+                    <label className="block text-[11px] font-bold text-slate-600 truncate">Contact Phone</label>
                     <button
                       type="button"
                       id="btn-whatsapp-menu"
@@ -703,21 +717,21 @@ export const PatientCaseSheet: React.FC<PatientCaseSheetProps> = ({
                         setCustomPhone(patient.contact || '');
                         setWhatsAppModalOpen(true);
                       }}
-                      className="flex items-center gap-1 text-[11px] font-bold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded-lg cursor-pointer transition-colors shadow-2xs"
+                      className="flex items-center gap-1 text-[10px] font-bold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded-lg cursor-pointer transition-colors shadow-2xs shrink-0"
                       title="Send Clinical Report, All Receipts, or Both via WhatsApp"
                     >
-                      <MessageSquare className="w-3 h-3 text-emerald-600" />
-                      <span>WhatsApp Menu</span>
+                      <MessageSquare className="w-2.5 h-2.5 text-emerald-600" />
+                      <span>WhatsApp</span>
                     </button>
                   </div>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 h-10">
                     <input
                       type="text"
                       value={patient.contact}
                       onChange={(e) => updateField('contact', e.target.value)}
                       placeholder="e.g. 9880517715"
                       disabled={isDeleted}
-                      className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-900 rounded-xl focus:border-sky-500 focus:ring-1 focus:ring-sky-200 outline-none font-semibold font-mono shadow-2xs"
+                      className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-900 rounded-xl focus:border-sky-500 focus:ring-1 focus:ring-sky-200 outline-none font-semibold font-mono shadow-2xs h-10"
                     />
                     <button
                       type="button"
@@ -726,7 +740,7 @@ export const PatientCaseSheet: React.FC<PatientCaseSheetProps> = ({
                         setCustomPhone(patient.contact || '');
                         setWhatsAppModalOpen(true);
                       }}
-                      className="shrink-0 p-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-xs transition-colors cursor-pointer"
+                      className="shrink-0 w-10 h-10 flex items-center justify-center bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-xs transition-colors cursor-pointer"
                       title="Send Report & Receipts via WhatsApp"
                       aria-label="WhatsApp Report & Receipts Menu"
                     >
@@ -737,12 +751,14 @@ export const PatientCaseSheet: React.FC<PatientCaseSheetProps> = ({
 
                 {/* Visit Type */}
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">Visit Type</label>
+                  <div className="h-5 flex items-center justify-between mb-1">
+                    <label className="block text-[11px] font-bold text-slate-600">Visit Type</label>
+                  </div>
                   <select
                     value={patient.visitType || 'Clinic'}
                     onChange={(e) => updateField('visitType', e.target.value as any)}
                     disabled={isDeleted}
-                    className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-900 rounded-xl focus:border-sky-500 focus:ring-1 focus:ring-sky-200 outline-none font-semibold cursor-pointer shadow-2xs"
+                    className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-900 rounded-xl focus:border-sky-500 focus:ring-1 focus:ring-sky-200 outline-none font-semibold cursor-pointer shadow-2xs h-10"
                   >
                     <option value="Clinic">Clinic Visit</option>
                     <option value="Home Visit">Home Visit</option>
@@ -751,9 +767,9 @@ export const PatientCaseSheet: React.FC<PatientCaseSheetProps> = ({
 
                 {/* Referred By Dropdown with Add Common Referral Doctor */}
                 <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-[11px] font-bold text-slate-600">Referred By</label>
-                    <div className="flex items-center gap-1.5">
+                  <div className="h-5 flex items-center justify-between mb-1">
+                    <label className="block text-[11px] font-bold text-slate-600 truncate">Referred By</label>
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <button
                         type="button"
                         onClick={() => setShowManageDoctorsModal(true)}
@@ -775,7 +791,7 @@ export const PatientCaseSheet: React.FC<PatientCaseSheetProps> = ({
                   </div>
 
                   {isAddingNewDoc ? (
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 h-10">
                       <input
                         type="text"
                         value={newDocInput}
@@ -788,12 +804,12 @@ export const PatientCaseSheet: React.FC<PatientCaseSheetProps> = ({
                             handleAddNewReferralDoc();
                           }
                         }}
-                        className="flex-1 px-3 py-1.5 bg-white border border-sky-300 rounded-xl text-xs font-semibold text-slate-900 focus:ring-1 focus:ring-sky-300 outline-none shadow-2xs"
+                        className="flex-1 px-3 py-1.5 bg-white border border-sky-300 rounded-xl text-xs font-semibold text-slate-900 focus:ring-1 focus:ring-sky-300 outline-none shadow-2xs h-10"
                       />
                       <button
                         type="button"
                         onClick={handleAddNewReferralDoc}
-                        className="px-3 py-1.5 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold shadow-2xs cursor-pointer"
+                        className="px-3 py-1.5 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold shadow-2xs cursor-pointer h-10"
                       >
                         Save
                       </button>
@@ -811,7 +827,7 @@ export const PatientCaseSheet: React.FC<PatientCaseSheetProps> = ({
                         }
                       }}
                       disabled={isDeleted}
-                      className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-900 rounded-xl focus:border-sky-500 focus:ring-1 focus:ring-sky-200 outline-none font-semibold cursor-pointer shadow-2xs"
+                      className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-900 rounded-xl focus:border-sky-500 focus:ring-1 focus:ring-sky-200 outline-none font-semibold cursor-pointer shadow-2xs h-10"
                     >
                       {patient.referredBy && !referralDocs.includes(patient.referredBy) && (
                         <option value={patient.referredBy}>{patient.referredBy}</option>
@@ -1585,97 +1601,99 @@ export const PatientCaseSheet: React.FC<PatientCaseSheetProps> = ({
                         })()}
                       </div>
 
-                      {/* Pain Scale in this Follow-up Session (Before & After) - Strict Single Line */}
-                      <div className="pt-2 border-t border-sky-50 space-y-3 bg-sky-50/40 p-3 rounded-2xl border border-sky-100/60">
-                        {/* Before Treatment Pain */}
-                        <div>
-                          <div className="flex items-center justify-between mb-1.5">
-                            <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
-                              <span>Pain Before Session:</span>
-                              <span className="text-[10px] text-slate-400 font-medium">(VAS 0–10)</span>
-                            </span>
-                            <span
-                              className={`text-[11px] font-extrabold px-2 py-0.5 rounded-md border ${
-                                getPainSeverityInfo(fuBefore).bg
-                              } ${getPainSeverityInfo(fuBefore).color} ${getPainSeverityInfo(fuBefore).border}`}
-                            >
-                              {getPainSeverityInfo(fuBefore).emoji} {fuBefore}/10 • {getPainSeverityInfo(fuBefore).label}
-                            </span>
-                          </div>
-                          {/* Single Line 0-10 Grid Scale */}
-                          <div className="grid grid-cols-11 gap-1 sm:gap-1.5 w-full">
-                            {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((v) => (
-                              <button
-                                key={v}
-                                type="button"
-                                disabled={isDeleted}
-                                onClick={() =>
-                                  handleUpdateFollowUp(idx, {
-                                    painScaleBefore: v,
-                                    painScale: v,
-                                  })
-                                }
-                                className={`h-7 sm:h-8 w-full rounded-lg border text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center ${getPainScoreButtonClass(
-                                  v,
-                                  fuBefore
-                                )}`}
-                                title={`Pain Before: ${v}/10 - ${getPainSeverityInfo(v).label}`}
-                              >
-                                {v}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        {/* After Treatment Pain */}
-                        <div>
-                          <div className="flex items-center justify-between mb-1.5">
-                            <div className="flex items-center gap-2">
-                              <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
-                                <span>Pain After Session:</span>
-                                <span className="text-[10px] text-slate-400 font-medium">(VAS 0–10)</span>
+                      {/* Pain Scale in this Follow-up Session (Before & After) - Side by Side in Same Line on Tab & Desktop */}
+                      <div className="pt-2 border-t border-sky-50 bg-sky-50/40 p-3 rounded-2xl border border-sky-100/60 space-y-3">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4 items-start">
+                          {/* Before Treatment Pain */}
+                          <div className="space-y-1.5 bg-white/70 p-2.5 rounded-xl border border-slate-200/70 shadow-2xs">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5 min-w-0">
+                                <span className="truncate">Pain Before Session:</span>
+                                <span className="text-[10px] text-slate-400 font-medium shrink-0">(VAS 0–10)</span>
                               </span>
-                              {fuAfter !== undefined && (
+                              <span
+                                className={`text-[10px] sm:text-[11px] font-extrabold px-1.5 py-0.5 rounded-md border shrink-0 ${
+                                  getPainSeverityInfo(fuBefore).bg
+                                } ${getPainSeverityInfo(fuBefore).color} ${getPainSeverityInfo(fuBefore).border}`}
+                              >
+                                {getPainSeverityInfo(fuBefore).emoji} {fuBefore}/10 • {getPainSeverityInfo(fuBefore).label}
+                              </span>
+                            </div>
+                            {/* Single Line 0-10 Grid Scale */}
+                            <div className="grid grid-cols-11 gap-1 w-full">
+                              {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((v) => (
                                 <button
+                                  key={v}
                                   type="button"
                                   disabled={isDeleted}
-                                  onClick={() => handleUpdateFollowUp(idx, { painScaleAfter: undefined })}
-                                  className="text-[10px] text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-1.5 py-0.5 rounded font-bold cursor-pointer transition-colors"
-                                  title="Clear after score"
+                                  onClick={() =>
+                                    handleUpdateFollowUp(idx, {
+                                      painScaleBefore: v,
+                                      painScale: v,
+                                    })
+                                  }
+                                  className={`h-7 sm:h-8 w-full rounded-lg border text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center ${getPainScoreButtonClass(
+                                    v,
+                                    fuBefore
+                                  )}`}
+                                  title={`Pain Before: ${v}/10 - ${getPainSeverityInfo(v).label}`}
                                 >
-                                  Clear
+                                  {v}
                                 </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* After Treatment Pain */}
+                          <div className="space-y-1.5 bg-white/70 p-2.5 rounded-xl border border-slate-200/70 shadow-2xs">
+                            <div className="flex items-center justify-between mb-1">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5 min-w-0">
+                                  <span className="truncate">Pain After Session:</span>
+                                  <span className="text-[10px] text-slate-400 font-medium shrink-0">(VAS 0–10)</span>
+                                </span>
+                                {fuAfter !== undefined && (
+                                  <button
+                                    type="button"
+                                    disabled={isDeleted}
+                                    onClick={() => handleUpdateFollowUp(idx, { painScaleAfter: undefined })}
+                                    className="text-[10px] text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-1.5 py-0.5 rounded font-bold cursor-pointer transition-colors shrink-0"
+                                    title="Clear after score"
+                                  >
+                                    Clear
+                                  </button>
+                                )}
+                              </div>
+                              {fuAfter !== undefined ? (
+                                <span
+                                  className={`text-[10px] sm:text-[11px] font-extrabold px-1.5 py-0.5 rounded-md border shrink-0 ${
+                                    getPainSeverityInfo(fuAfter).bg
+                                  } ${getPainSeverityInfo(fuAfter).color} ${getPainSeverityInfo(fuAfter).border}`}
+                                >
+                                  {getPainSeverityInfo(fuAfter).emoji} {fuAfter}/10 • {getPainSeverityInfo(fuAfter).label}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-semibold text-slate-400 italic shrink-0">Not rated</span>
                               )}
                             </div>
-                            {fuAfter !== undefined ? (
-                              <span
-                                className={`text-[11px] font-extrabold px-2 py-0.5 rounded-md border ${
-                                  getPainSeverityInfo(fuAfter).bg
-                                } ${getPainSeverityInfo(fuAfter).color} ${getPainSeverityInfo(fuAfter).border}`}
-                              >
-                                {getPainSeverityInfo(fuAfter).emoji} {fuAfter}/10 • {getPainSeverityInfo(fuAfter).label}
-                              </span>
-                            ) : (
-                              <span className="text-[10px] font-semibold text-slate-400 italic">Not rated</span>
-                            )}
-                          </div>
-                          {/* Single Line 0-10 Grid Scale */}
-                          <div className="grid grid-cols-11 gap-1 sm:gap-1.5 w-full">
-                            {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((v) => (
-                              <button
-                                key={v}
-                                type="button"
-                                disabled={isDeleted}
-                                onClick={() => handleUpdateFollowUp(idx, { painScaleAfter: v })}
-                                className={`h-7 sm:h-8 w-full rounded-lg border text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center ${getPainScoreButtonClass(
-                                  v,
-                                  fuAfter
-                                )}`}
-                                title={`Pain After: ${v}/10 - ${getPainSeverityInfo(v).label}`}
-                              >
-                                {v}
-                              </button>
-                            ))}
+                            {/* Single Line 0-10 Grid Scale */}
+                            <div className="grid grid-cols-11 gap-1 w-full">
+                              {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((v) => (
+                                <button
+                                  key={v}
+                                  type="button"
+                                  disabled={isDeleted}
+                                  onClick={() => handleUpdateFollowUp(idx, { painScaleAfter: v })}
+                                  className={`h-7 sm:h-8 w-full rounded-lg border text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center ${getPainScoreButtonClass(
+                                    v,
+                                    fuAfter
+                                  )}`}
+                                  title={`Pain After: ${v}/10 - ${getPainSeverityInfo(v).label}`}
+                                >
+                                  {v}
+                                </button>
+                              ))}
+                            </div>
                           </div>
                         </div>
 

@@ -13,6 +13,7 @@ import { GoogleSheetsDashboard } from './components/GoogleSheetsDashboard';
 import { NewPatientModal } from './components/NewPatientModal';
 import { BackupEntryPasskeyModal } from './components/BackupEntryPasskeyModal';
 import { LocumTenensManager } from './components/LocumTenensManager';
+import { LoadingScreen } from './components/LoadingScreen';
 
 import { Patient, SearchFilter, ReceiptData, ClinicSettings } from './types';
 import { CLINIC_CONFIG } from './constants';
@@ -29,6 +30,7 @@ import {
   localDB,
 } from './utils/storage';
 import { pushToGoogleAppsScript } from './utils/googleSheetsSync';
+import { playAddPatientPing } from './utils/audioNotification';
 import {
   isHourlyBackupDue,
   executeHourlyBackup,
@@ -36,6 +38,7 @@ import {
 } from './utils/hourlyBackup';
 
 export function App() {
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [patients, setPatients] = useState<Patient[]>(() => deduplicatePatients(loadPatients()));
   const [activePatientId, setActivePatientId] = useState<string | null>(() => {
     const loaded = deduplicatePatients(loadPatients());
@@ -75,6 +78,11 @@ export function App() {
       )
       .catch((err) => {
         console.warn('Local database auto-bootstrap notice:', err);
+      })
+      .finally(() => {
+        setTimeout(() => {
+          setIsInitialLoading(false);
+        }, 500);
       });
   }, []);
 
@@ -226,13 +234,37 @@ export function App() {
 
   // Only called when user has entered patient details fully in the registration form
   const handleSaveNewPatient = (newPt: Patient) => {
-    setPatients((prev) => deduplicatePatients([newPt, ...prev]));
+    // Play pleasant musical ping chime upon successfully adding patient
+    playAddPatientPing();
+
+    const updatedPatients = deduplicatePatients([newPt, ...patients]);
+    setPatients(updatedPatients);
     setActivePatientId(newPt.id);
     setIsNewPatientModalOpen(false);
     // Switch filter to show active patients and clear query
     setSearchFilter((prev) => ({ ...prev, status: 'active', query: '' }));
     setCurrentView('patients');
     setMobileShowDirectory(false);
+
+    // Instant append to Google Apps Script Archives (strictly add-only, no overwriting, automatic local DB replication)
+    try {
+      const webhookUrl = localStorage.getItem('namana_script_url') || clinicSettings.scriptUrl || '';
+      if (webhookUrl && webhookUrl.trim().startsWith('http')) {
+        const archiveConfig = {
+          archiveSheet1Id: localStorage.getItem('namana_archive_sheet_1_id') || clinicSettings.archiveSheetId1 || undefined,
+          archiveSheet2Id: localStorage.getItem('namana_archive_sheet_2_id') || clinicSettings.archiveSheetId2 || undefined,
+        };
+        pushToGoogleAppsScript(webhookUrl.trim(), updatedPatients, archiveConfig, 'addPatient', newPt)
+          .then((res) => {
+            console.log('Instant add patient archived via Apps Script:', res?.message);
+          })
+          .catch((err) => {
+            console.warn('Instant add patient Apps Script archive push encountered non-fatal error:', err);
+          });
+      }
+    } catch (e) {
+      console.warn('Failed to dispatch instant add-patient webhook event:', e);
+    }
   };
 
   // Update existing patient
@@ -312,6 +344,15 @@ export function App() {
 
   // Currently active patient object
   const activePatient = patients.find((p) => p.id === activePatientId) || patients[0] || null;
+
+  if (isInitialLoading) {
+    return (
+      <LoadingScreen
+        message={CLINIC_CONFIG.clinicName}
+        subMessage="Loading clinical database & system records..."
+      />
+    );
+  }
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-50 text-slate-800 font-sans">

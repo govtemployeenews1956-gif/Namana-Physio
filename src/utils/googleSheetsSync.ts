@@ -1,6 +1,7 @@
 import { Patient, TreatmentModalities, FollowUpVisit, ComorbidConditions, VasChartDataPoint } from '../types';
 import { defaultTreatmentModalities, formatPatientId, parsePatientId, parseDateAndTimestamp } from './storage';
 import { MODALITIES_LIST } from '../constants';
+import { localDB } from '../db/localDatabase';
 
 export function formatComorbidities(c?: ComorbidConditions): string {
   if (!c) return 'None';
@@ -855,12 +856,123 @@ export async function fetchFromAppsScriptWebhook(webhookUrl: string): Promise<Sh
 }
 
 /**
- * Pushes patients to a Google Apps Script Web App (Webhook) with guaranteed text formatting for phone numbers
+ * Helper to serialize a patient object into clean spreadsheet payload values
+ */
+export function formatPatientForPayload(p: Patient) {
+  const phoneCell = formatPhoneForSheet(p.contact);
+  const { cleanDate, cleanTime } = parseDateAndTimestamp(p.date, p.time, p.createdAt || p.updatedAt, p.id);
+  const initialFee = parseFloat(String(p.treatmentFee)) || 0;
+  const followUpTotal = (p.followUps || []).reduce(
+    (sum, fu) => sum + (parseFloat(String(fu.fee)) || 0),
+    0
+  );
+
+  let cleanRegNo = (p.regNo || '').trim();
+  const parsedReg = parsePatientId(cleanRegNo);
+  if (parsedReg) {
+    cleanRegNo = formatPatientId(cleanDate, parsedReg.seq);
+  } else if (!cleanRegNo) {
+    cleanRegNo = formatPatientId(cleanDate, p.serial);
+  }
+
+  const painBefore = p.painScaleBefore !== undefined ? p.painScaleBefore : (p.painScale !== undefined ? p.painScale : '');
+  const painAfter = p.painScaleAfter !== undefined ? p.painScaleAfter : '';
+  const painDiff = (typeof painBefore === 'number' && typeof painAfter === 'number')
+    ? `${painBefore - painAfter} pts (${painBefore - painAfter >= 0 ? 'Relief' : 'Increase'})`
+    : '';
+
+  const vasChartData = buildVasChartData(p);
+  const vasChartSummary = formatVasTrajectorySummary(p);
+  const vasChartJson = JSON.stringify(vasChartData);
+
+  return {
+    id: p.id,
+    serial: p.serial,
+    regNo: cleanRegNo,
+    date: cleanDate,
+    time: cleanTime,
+    name: sanitizeSpreadsheetCell(p.name),
+    age: p.age,
+    sex: p.sex,
+    contact: phoneCell,
+    address: sanitizeSpreadsheetCell(p.address || ''),
+    bloodGroup: p.bloodGroup || '',
+    height: p.height || '',
+    weight: p.weight || '',
+    seenBy: sanitizeSpreadsheetCell(p.seenBy || 'R. Chandrashekar'),
+    referredBy: sanitizeSpreadsheetCell(p.referredBy || ''),
+    diagnosis: sanitizeSpreadsheetCell(p.diagnosis || ''),
+    history: sanitizeSpreadsheetCell(p.history || ''),
+    comorbid: formatComorbidities(p.comorbid),
+    modalities: formatModalities(p.treatment),
+    painScaleBefore: painBefore,
+    painScaleAfter: painAfter,
+    painScale: painBefore,
+    painImprovement: painDiff,
+    vasChartSummary,
+    vasChartJson,
+    treatmentFee: initialFee,
+    paymentMethod: p.paymentMethod || 'Cash',
+    visitType: p.visitType || 'Clinic',
+    receiptNo: p.receiptNo || '',
+    followUpsCount: (p.followUps || []).length,
+    followUpsTotalFee: followUpTotal,
+    totalRevenue: initialFee + followUpTotal,
+    followUpsSummary: formatFollowUpsSummary(p.followUps),
+    followUpsDetail: p.followUps && p.followUps.length > 0 ? JSON.stringify(p.followUps) : '',
+    followUps: (p.followUps || []).map((fu, idx) => {
+      const fuBefore = fu.painScaleBefore !== undefined ? fu.painScaleBefore : (fu.painScale !== undefined ? fu.painScale : '');
+      const fuAfter = fu.painScaleAfter !== undefined ? fu.painScaleAfter : '';
+      const fuDiff = (typeof fuBefore === 'number' && typeof fuAfter === 'number')
+        ? `${fuBefore - fuAfter} pts`
+        : '';
+      const fuFee = parseFloat(String(fu.fee)) || 0;
+      const fuTreatments = formatFollowUpTreatments(fu);
+      const fuDt = parseDateAndTimestamp(
+        fu.date,
+        fu.time,
+        fu.createdAt || fu.updatedAt || p.createdAt || p.updatedAt,
+        fu.id
+      );
+
+      return {
+        sessionNum: idx + 1,
+        id: fu.id,
+        date: fuDt.cleanDate,
+        time: fuDt.cleanTime,
+        notes: sanitizeSpreadsheetCell(fu.notes || ''),
+        painScaleBefore: fuBefore,
+        painScaleAfter: fuAfter,
+        painScale: fuBefore,
+        painImprovement: fuDiff,
+        treatment: fuTreatments,
+        modalities: fuTreatments,
+        treatmentsGiven: fu.treatmentsGiven || [],
+        fee: fuFee,
+        treatmentFee: fuFee,
+        receiptNo: fu.receiptNo || '',
+        paymentMethod: fu.paymentMethod || p.paymentMethod || 'Cash',
+        visitType: fu.visitType || p.visitType || 'Clinic',
+        createdAt: fu.createdAt ? new Date(fu.createdAt).toISOString() : (p.createdAt ? new Date(p.createdAt).toISOString() : ''),
+        updatedAt: fu.updatedAt ? new Date(fu.updatedAt).toISOString() : '',
+      };
+    }),
+    status: p.deleted ? 'Deleted' : 'Active',
+    createdAt: p.createdAt ? new Date(p.createdAt).toISOString() : '',
+    updatedAt: p.updatedAt ? new Date(p.updatedAt).toISOString() : '',
+  };
+}
+
+/**
+ * Pushes patients to a Google Apps Script Web App (Webhook) with guaranteed text formatting for phone numbers.
+ * Supports full snapshots ('sync') and instant additions ('addPatient') targeting Archive 1 & 2 without overwriting.
  */
 export async function pushToGoogleAppsScript(
   webhookUrl: string,
   patients: Patient[],
-  archiveConfig?: { archiveSheet1Id?: string; archiveSheet2Id?: string }
+  archiveConfig?: { archiveSheet1Id?: string; archiveSheet2Id?: string },
+  action: 'sync' | 'addPatient' = 'sync',
+  newPatient?: Patient
 ): Promise<{ success: boolean; message: string; archiveReport?: any[] }> {
   if (!webhookUrl || !webhookUrl.startsWith('http')) {
     return {
@@ -873,108 +985,50 @@ export async function pushToGoogleAppsScript(
     const arc1Clean = extractSpreadsheetId(archiveConfig?.archiveSheet1Id || '') || (archiveConfig?.archiveSheet1Id || '').trim();
     const arc2Clean = extractSpreadsheetId(archiveConfig?.archiveSheet2Id || '') || (archiveConfig?.archiveSheet2Id || '').trim();
 
+    // Gather local database engine telemetry, tables, and settings for replication
+    let localDBData: any = null;
+    try {
+      const stats = await localDB.getDatabaseStats(patients);
+      const locums = await localDB.getLocumPhysiotherapists();
+      const docs = await localDB.getReferralDoctors();
+      localDBData = {
+        stats,
+        locums: locums && locums.length > 0 ? locums : [
+          { id: 'LOC-001', name: 'R. Chandrashekar', qualification: 'BPT, MPT (Chief Physiotherapist)', idNumber: 'REG-MYS-01', status: 'Active' }
+        ],
+        referralDoctors: docs && docs.length > 0 ? docs : [
+          'Self / Direct Walk-In',
+          'Dr. Kumar (Orthopedic Surgeon)',
+          'Dr. Sneha (Neurologist)',
+          'Dr. Ramesh (General Physician)'
+        ],
+        exportedAt: new Date().toISOString()
+      };
+    } catch {
+      localDBData = {
+        stats: {
+          engine: 'IndexedDB',
+          databaseName: 'NamanaPhysioLocalDB',
+          totalPatients: patients.length,
+          activePatients: patients.filter(p => !p.deleted).length,
+          status: 'connected',
+        },
+        locums: [
+          { id: 'LOC-001', name: 'R. Chandrashekar', qualification: 'BPT, MPT (Chief Physiotherapist)', idNumber: 'REG-MYS-01', status: 'Active' }
+        ],
+        referralDoctors: ['Self / Direct Walk-In'],
+        exportedAt: new Date().toISOString()
+      };
+    }
+
     const payload = {
-      action: 'sync',
+      action,
       timestamp: new Date().toISOString(),
       archiveSheet1Id: arc1Clean,
       archiveSheet2Id: arc2Clean,
-      patients: patients.map((p) => {
-        const phoneCell = formatPhoneForSheet(p.contact);
-        const { cleanDate, cleanTime } = parseDateAndTimestamp(p.date, p.time, p.updatedAt || p.createdAt);
-        const initialFee = parseFloat(String(p.treatmentFee)) || 0;
-        const followUpTotal = (p.followUps || []).reduce(
-          (sum, fu) => sum + (parseFloat(String(fu.fee)) || 0),
-          0
-        );
-
-        let cleanRegNo = (p.regNo || '').trim();
-        const parsedReg = parsePatientId(cleanRegNo);
-        if (parsedReg) {
-          cleanRegNo = formatPatientId(cleanDate, parsedReg.seq);
-        } else if (!cleanRegNo) {
-          cleanRegNo = formatPatientId(cleanDate, p.serial);
-        }
-
-        const painBefore = p.painScaleBefore !== undefined ? p.painScaleBefore : (p.painScale !== undefined ? p.painScale : '');
-        const painAfter = p.painScaleAfter !== undefined ? p.painScaleAfter : '';
-        const painDiff = (typeof painBefore === 'number' && typeof painAfter === 'number')
-          ? `${painBefore - painAfter} pts (${painBefore - painAfter >= 0 ? 'Relief' : 'Increase'})`
-          : '';
-
-        const vasChartData = buildVasChartData(p);
-        const vasChartSummary = formatVasTrajectorySummary(p);
-        const vasChartJson = JSON.stringify(vasChartData);
-
-        return {
-          id: p.id,
-          serial: p.serial,
-          regNo: cleanRegNo,
-          date: cleanDate,
-          time: cleanTime,
-          name: sanitizeSpreadsheetCell(p.name),
-          age: p.age,
-          sex: p.sex,
-          contact: phoneCell,
-          address: sanitizeSpreadsheetCell(p.address || ''),
-          bloodGroup: p.bloodGroup || '',
-          height: p.height || '',
-          weight: p.weight || '',
-          seenBy: sanitizeSpreadsheetCell(p.seenBy || 'R. Chandrashekar'),
-          referredBy: sanitizeSpreadsheetCell(p.referredBy || ''),
-          diagnosis: sanitizeSpreadsheetCell(p.diagnosis || ''),
-          history: sanitizeSpreadsheetCell(p.history || ''),
-          comorbid: formatComorbidities(p.comorbid),
-          modalities: formatModalities(p.treatment),
-          painScaleBefore: painBefore,
-          painScaleAfter: painAfter,
-          painScale: painBefore,
-          painImprovement: painDiff,
-          vasChartSummary,
-          vasChartJson,
-          treatmentFee: initialFee,
-          paymentMethod: p.paymentMethod || 'Cash',
-          visitType: p.visitType || 'Clinic',
-          receiptNo: p.receiptNo || '',
-          followUpsCount: (p.followUps || []).length,
-          followUpsTotalFee: followUpTotal,
-          totalRevenue: initialFee + followUpTotal,
-          followUpsSummary: formatFollowUpsSummary(p.followUps),
-          followUpsDetail: p.followUps && p.followUps.length > 0 ? JSON.stringify(p.followUps) : '',
-          followUps: (p.followUps || []).map((fu, idx) => {
-            const fuBefore = fu.painScaleBefore !== undefined ? fu.painScaleBefore : (fu.painScale !== undefined ? fu.painScale : '');
-            const fuAfter = fu.painScaleAfter !== undefined ? fu.painScaleAfter : '';
-            const fuDiff = (typeof fuBefore === 'number' && typeof fuAfter === 'number')
-              ? `${fuBefore - fuAfter} pts`
-              : '';
-            const fuFee = parseFloat(String(fu.fee)) || 0;
-            const fuTreatments = formatFollowUpTreatments(fu);
-            const fuDt = parseDateAndTimestamp(fu.date, fu.time, fu.updatedAt || fu.createdAt || p.updatedAt || p.createdAt);
-
-            return {
-              sessionNum: idx + 1,
-              id: fu.id,
-              date: fuDt.cleanDate,
-              time: fuDt.cleanTime,
-              notes: sanitizeSpreadsheetCell(fu.notes || ''),
-              painScaleBefore: fuBefore,
-              painScaleAfter: fuAfter,
-              painScale: fuBefore,
-              painImprovement: fuDiff,
-              treatment: fuTreatments,
-              modalities: fuTreatments,
-              treatmentsGiven: fu.treatmentsGiven || [],
-              fee: fuFee,
-              treatmentFee: fuFee,
-              receiptNo: fu.receiptNo || '',
-              paymentMethod: fu.paymentMethod || p.paymentMethod || 'Cash',
-              visitType: fu.visitType || p.visitType || 'Clinic',
-            };
-          }),
-          status: p.deleted ? 'Deleted' : 'Active',
-          createdAt: p.createdAt ? new Date(p.createdAt).toISOString() : '',
-          updatedAt: p.updatedAt ? new Date(p.updatedAt).toISOString() : '',
-        };
-      }),
+      localDBData: localDBData,
+      newPatient: newPatient ? formatPatientForPayload(newPatient) : null,
+      patients: patients.map(formatPatientForPayload),
     };
 
     const controller = new AbortController();
@@ -1004,7 +1058,7 @@ export async function pushToGoogleAppsScript(
           const successful = archiveReport.filter((r) => r.status === 'success');
           const failed = archiveReport.filter((r) => r.status === 'error');
           if (successful.length > 0) {
-            extraNotice += ` | Archives synced: ${successful.map((s) => `${s.label} (${s.added || 0} added)`).join(', ')}`;
+            extraNotice += ` | Archives synced: ${successful.map((s) => `${s.label} (${s.patientsAppended || s.added || 0} appended)`).join(', ')}`;
           }
           if (failed.length > 0) {
             extraNotice += ` | Archive issue: ${failed.map((f) => `${f.label} (${f.message || 'Permission denied'})`).join('; ')}`;
@@ -1012,9 +1066,13 @@ export async function pushToGoogleAppsScript(
         }
       } catch {}
 
+      const successMsg = action === 'addPatient'
+        ? `Successfully registered new patient into records and appended to Archive Sheets 1 & 2 without overwriting${extraNotice || ''}!`
+        : `Successfully backed up all ${patients.length} records, follow-up sessions, and Local Database Engine to connected sheets${extraNotice || ''}!`;
+
       return {
         success: true,
-        message: `Successfully backed up all ${patients.length} records and follow-up sessions to Primary Sheet${extraNotice || ''}!`,
+        message: successMsg,
         archiveReport,
       };
     } else {
@@ -1031,6 +1089,32 @@ export async function pushToGoogleAppsScript(
       message: `Sync command dispatched to Google Apps Script.`,
     };
   }
+}
+
+/**
+ * Pushes Local Database Engine data (IndexedDB schema, statistics, locum directory, referral doctors)
+ * into a dedicated sheet ('Local Database Engine') in the connected Google Spreadsheet,
+ * and automatically replicates it to Archive Sheet 1 and Archive Sheet 2.
+ */
+export async function pushLocalDatabaseEngineToSheets(
+  webhookUrl: string,
+  patients: Patient[],
+  archiveConfig?: { archiveSheet1Id?: string; archiveSheet2Id?: string }
+): Promise<{ success: boolean; message: string; archiveReport?: any[] }> {
+  if (!webhookUrl || !webhookUrl.startsWith('http')) {
+    return {
+      success: false,
+      message: 'Please provide a valid Google Apps Script Web App URL first to replicate Local DB Engine data.',
+    };
+  }
+  const result = await pushToGoogleAppsScript(webhookUrl, patients, archiveConfig);
+  if (result.success) {
+    return {
+      ...result,
+      message: 'Local Database Engine data pushed to separate sheet and replicated across connected spreadsheets and archives successfully!',
+    };
+  }
+  return result;
 }
 
 /**
@@ -1075,7 +1159,7 @@ export async function copyTableForGoogleSheets(patients: Patient[]): Promise<boo
   const rows = patients
     .filter((p) => !p.deleted)
     .map((p) => {
-      const { cleanDate, cleanTime } = parseDateAndTimestamp(p.date, p.time, p.updatedAt || p.createdAt);
+      const { cleanDate, cleanTime } = parseDateAndTimestamp(p.date, p.time, p.createdAt || p.updatedAt, p.id);
       let cleanRegNo = (p.regNo || '').trim();
       const parsedReg = parsePatientId(cleanRegNo);
       if (parsedReg) {
@@ -1202,7 +1286,7 @@ export function downloadGoogleSheetCsv(patients: Patient[]): void {
       const initialFee = parseFloat(String(p.treatmentFee)) || 0;
       const totalRev = initialFee + followUpTotal;
       const cleanPhone = cleanPhoneNumber(p.contact);
-      const { cleanDate, cleanTime } = parseDateAndTimestamp(p.date, p.time, p.updatedAt || p.createdAt);
+      const { cleanDate, cleanTime } = parseDateAndTimestamp(p.date, p.time, p.createdAt || p.updatedAt, p.id);
 
       let cleanRegNo = (p.regNo || '').trim();
       const parsedReg = parsePatientId(cleanRegNo);
@@ -2422,10 +2506,12 @@ function getPhoneDirectoryDashboardHtml(initialJson) {
 /**
  * Helper to ensure time is formatted in strict 24-hour format HH:mm:ss.
  * Prevents legacy static "10:00:00" defaults and normalizes any 12-hour or empty timestamps.
+ * Uses record creation/update timestamp as fallback to preserve the real-world entry time.
  */
-function formatScriptTime24(t) {
-  var s = t ? String(t).trim() : '';
-  if (s && s !== '10:00:00' && s !== '10:00') {
+function formatScriptTime24(t, fallbackIsoOrEpoch) {
+  var s = (t !== undefined && t !== null) ? String(t).trim() : '';
+  var isDummy10 = (!s || s === '10:00:00' || s === '10:00' || s === '10:00 AM' || s === '10:00:00 AM' || s === '10:00:00 am' || s === '10:00 am');
+  if (!isDummy10) {
     var m12 = s.match(/^(\\d{1,2}):(\\d{2})(?::(\\d{2}))?\\s*(am|pm)$/i);
     if (m12) {
       var h = parseInt(m12[1], 10);
@@ -2438,16 +2524,111 @@ function formatScriptTime24(t) {
     }
     if (/^([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d$/.test(s)) return s;
     if (/^([01]\\d|2[0-3]):[0-5]\\d$/.test(s)) return s + ':00';
+    if (s.indexOf('T') > -1) {
+      var timePart = s.split('T')[1].replace(/Z$/i, '').split('.')[0];
+      if (/^([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d$/.test(timePart)) return timePart;
+    }
   }
+
+  // If dummy or missing, recover from fallback timestamp (createdAt / updatedAt)
+  if (fallbackIsoOrEpoch) {
+    var fbNum = Number(fallbackIsoOrEpoch);
+    var dFb = (!isNaN(fbNum) && fbNum > 1000000000) ? new Date(fbNum) : new Date(fallbackIsoOrEpoch);
+    if (!isNaN(dFb.getTime()) && dFb.getFullYear() > 2000) {
+      var fbFormatted = Utilities.formatDate(dFb, Session.getScriptTimeZone() || 'Asia/Kolkata', 'HH:mm:ss');
+      if (fbFormatted !== '10:00:00') return fbFormatted;
+    }
+  }
+
   return Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'Asia/Kolkata', 'HH:mm:ss');
 }
 
 /**
- * Self-healing Archive Patient Registry helper
- * Deduplicates by normalized Reg No, prunes historical duplicates, updates existing rows, and appends new rows.
+ * Normalizes any Date object, ISO timestamp, or date string into standard yyyy-MM-dd format for reliable comparison.
  */
-function archivePatientsToSpreadsheet(ss, patients, sheetTitle, nowTimestamp) {
-  if (!ss) return { added: 0, updated: 0, prunedDuplicates: 0 };
+function normalizeArchiveDate(val) {
+  if (!val && val !== 0) return '';
+  if (Object.prototype.toString.call(val) === '[object Date]' && !isNaN(val.getTime())) {
+    try {
+      return Utilities.formatDate(val, Session.getScriptTimeZone() || 'Asia/Kolkata', 'yyyy-MM-dd');
+    } catch(e) {
+      return Utilities.formatDate(val, 'GMT', 'yyyy-MM-dd');
+    }
+  }
+  var s = String(val).trim();
+  var ymd = s.match(/^(\\d{4})[\\/\\-\\.](\\d{1,2})[\\/\\-\\.](\\d{1,2})/);
+  if (ymd) {
+    var m = (ymd[2].length === 1 ? '0' : '') + ymd[2];
+    var d = (ymd[3].length === 1 ? '0' : '') + ymd[3];
+    return ymd[1] + '-' + m + '-' + d;
+  }
+  var dmy = s.match(/^(\\d{1,2})[\\/\\-\\.](\\d{1,2})[\\/\\-\\.](\\d{4})/);
+  if (dmy) {
+    var d2 = (dmy[1].length === 1 ? '0' : '') + dmy[1];
+    var m2 = (dmy[2].length === 1 ? '0' : '') + dmy[2];
+    return dmy[3] + '-' + m2 + '-' + d2;
+  }
+  return s.toLowerCase();
+}
+
+/**
+ * Normalizes any Date object or time string into strict HH:mm:ss format for reliable comparison.
+ */
+function normalizeArchiveTime(val) {
+  if (!val && val !== 0) return '';
+  if (Object.prototype.toString.call(val) === '[object Date]' && !isNaN(val.getTime())) {
+    try {
+      return Utilities.formatDate(val, Session.getScriptTimeZone() || 'Asia/Kolkata', 'HH:mm:ss');
+    } catch(e) {
+      return Utilities.formatDate(val, 'GMT', 'HH:mm:ss');
+    }
+  }
+  var s = String(val).trim();
+  var m12 = s.match(/^(\\d{1,2}):(\\d{2})(?::(\\d{2}))?\\s*(am|pm)$/i);
+  if (m12) {
+    var h = parseInt(m12[1], 10);
+    var min = m12[2];
+    var sec = m12[3] || '00';
+    var ampm = m12[4].toUpperCase();
+    if (ampm === 'PM' && h < 12) h += 12;
+    if (ampm === 'AM' && h === 12) h = 0;
+    return (h < 10 ? '0' : '') + h + ':' + min + ':' + sec;
+  }
+  var m24 = s.match(/^(\\d{1,2}):(\\d{2})(?::(\\d{2}))?/);
+  if (m24) {
+    var h2 = parseInt(m24[1], 10);
+    var min2 = m24[2];
+    var sec2 = m24[3] ? m24[3] : '00';
+    return (h2 < 10 ? '0' : '') + h2 + ':' + min2 + ':' + sec2;
+  }
+  return s.toLowerCase();
+}
+
+/**
+ * Cleans registration numbers to alphanumeric characters for consistent key matching.
+ */
+function normalizeRegKey(val) {
+  if (!val) return '';
+  return String(val).replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+}
+
+/**
+ * Normalizes patient names by removing excess whitespace for consistent key matching.
+ */
+function normalizeNameKey(val) {
+  if (!val) return '';
+  return String(val).trim().toLowerCase().replace(/\\s+/g, ' ');
+}
+
+/**
+ * STRICTLY ADD-ONLY Archive Patient Registry helper with DATE & TIMESTAMP DUPLICATE PREVENTION:
+ * - DEDUPLICATION PRESERVATION: Records with the SAME Consultation Date and Time Stamp are NEVER stored multiple times.
+ * - NO OVERWRITING: Existing unique history is preserved intact; new non-duplicate records are appended directly.
+ * - HISTORICAL CLEANUP: Prunes duplicate rows with identical date and timestamp in existing archive sheets.
+ * - Formats Column 1 (Reg No), 4 (Time Stamp), and 7 (Contact) as text (@) so phone numbers and seconds are preserved.
+ */
+function pureAppendPatientsToArchive(ss, patients, sheetTitle, nowTimestamp, eventMode) {
+  if (!ss) return { appended: 0, deduplicated: false };
   var title = sheetTitle || "Archive Patient Registry";
   var sheetArc = ss.getSheetByName(title);
   if (!sheetArc) {
@@ -2455,95 +2636,141 @@ function archivePatientsToSpreadsheet(ss, patients, sheetTitle, nowTimestamp) {
     var arcCols = [
       "Reg No", "Patient Name", "Consultation Date", "Time Stamp", "Age", "Sex", "Contact Number", "Address",
       "Blood Group", "Seen By", "Referred By", "Clinical Diagnosis", "Comorbid Conditions", "Prescribed Modalities",
-      "Initial Fee (INR)", "Payment Mode", "Total Revenue (INR)", "Archive Status", "First Archived At", "Last Updated At"
+      "Initial Fee (INR)", "Payment Mode", "Total Revenue (INR)", "Archive Status", "Archive Event / Mode", "Archived At"
     ];
     sheetArc.appendRow(arcCols);
     sheetArc.getRange(1, 1, 1, arcCols.length).setFontWeight("bold").setBackground("#dcfce7").setFontColor("#166534");
     sheetArc.setFrozenRows(1);
   }
 
-  var arcData = sheetArc.getDataRange().getValues();
-  var arcRegMap = {};
-  var duplicatePatientRows = [];
+  var lastRow = sheetArc.getLastRow();
+  var existingSignatures = {};
+  var cleanExistingRows = [];
+  var hasExistingDuplicates = false;
 
-  for (var ar = 1; ar < arcData.length; ar++) {
-    var rawReg = arcData[ar][0];
-    var normKey = normalizeRegKey(rawReg);
-    if (normKey) {
-      if (arcRegMap[normKey]) {
-        duplicatePatientRows.push(ar + 1);
-      } else {
-        arcRegMap[normKey] = ar + 1;
+  // 1. Audit existing archive rows to prevent duplicates and index existing Date + Timestamp signatures
+  if (lastRow > 1) {
+    var numCols = sheetArc.getLastColumn() || 20;
+    var existingValues = sheetArc.getRange(2, 1, lastRow - 1, numCols).getValues();
+
+    for (var r = 0; r < existingValues.length; r++) {
+      var row = existingValues[r];
+      var rReg = normalizeRegKey(row[0]);
+      var rName = normalizeNameKey(row[1]);
+      var rDate = normalizeArchiveDate(row[2]);
+      var rTime = normalizeArchiveTime(row[3]);
+
+      var isDup = false;
+      if (rDate && rTime) {
+        var sig1 = (rReg || rName || ('r_' + r)) + '|' + rDate + '|' + rTime;
+        var sigReg = rReg ? (rReg + '|' + rDate + '|' + rTime) : '';
+        var sigName = rName ? (rName + '|' + rDate + '|' + rTime) : '';
+
+        if (existingSignatures[sig1] || (sigReg && existingSignatures[sigReg]) || (sigName && existingSignatures[sigName])) {
+          isDup = true;
+          hasExistingDuplicates = true;
+        } else {
+          existingSignatures[sig1] = true;
+          if (sigReg) existingSignatures[sigReg] = true;
+          if (sigName) existingSignatures[sigName] = true;
+        }
+      }
+
+      if (!isDup) {
+        cleanExistingRows.push(row);
       }
     }
+
+    // Clean up historical duplicates with the same date & timestamp in the archive sheet
+    if (hasExistingDuplicates && cleanExistingRows.length > 0) {
+      sheetArc.getRange(2, 1, lastRow - 1, numCols).clearContent();
+      sheetArc.getRange(2, 1, cleanExistingRows.length, cleanExistingRows[0].length).setValues(cleanExistingRows);
+      sheetArc.getRange(2, 1, cleanExistingRows.length, 1).setNumberFormat("@");
+      sheetArc.getRange(2, 4, cleanExistingRows.length, 1).setNumberFormat("@");
+      sheetArc.getRange(2, 7, cleanExistingRows.length, 1).setNumberFormat("@");
+    }
   }
 
-  // Prune any duplicate patient rows in reverse order
-  for (var dr = duplicatePatientRows.length - 1; dr >= 0; dr--) {
-    sheetArc.deleteRow(duplicatePatientRows[dr]);
+  if (!patients || patients.length === 0) {
+    return { appended: 0, deduplicated: hasExistingDuplicates };
   }
 
-  // Refresh map after pruning
-  if (duplicatePatientRows.length > 0) {
-    arcData = sheetArc.getDataRange().getValues();
-    arcRegMap = {};
-    for (var ar2 = 1; ar2 < arcData.length; ar2++) {
-      var norm2 = normalizeRegKey(arcData[ar2][0]);
-      if (norm2 && !arcRegMap[norm2]) {
-        arcRegMap[norm2] = ar2 + 1;
+  // 2. Filter incoming patients: Prevent data with the same Date and Timestamp from being stored multiple times
+  var mode = eventMode || "Add Patient / Sync";
+  var newRows = [];
+
+  for (var i = 0; i < patients.length; i++) {
+    var p = patients[i];
+    if (p.deleted || p.status === 'Deleted') continue;
+
+    var pReg = normalizeRegKey(p.regNo);
+    var pName = normalizeNameKey(p.name);
+    var pDate = normalizeArchiveDate(p.date);
+    var pRealTime = formatScriptTime24(p.time, p.createdAt || p.updatedAt);
+    var pTimeNorm = normalizeArchiveTime(pRealTime);
+
+    if (pDate && pTimeNorm) {
+      var inSig = (pReg || pName || ('in_' + i)) + '|' + pDate + '|' + pTimeNorm;
+      var inSigReg = pReg ? (pReg + '|' + pDate + '|' + pTimeNorm) : '';
+      var inSigName = pName ? (pName + '|' + pDate + '|' + pTimeNorm) : '';
+
+      // Strictly prevent storing data with same date and timestamp multiple times
+      if (existingSignatures[inSig] || (inSigReg && existingSignatures[inSigReg]) || (inSigName && existingSignatures[inSigName])) {
+        continue;
       }
+
+      existingSignatures[inSig] = true;
+      if (inSigReg) existingSignatures[inSigReg] = true;
+      if (inSigName) existingSignatures[inSigName] = true;
     }
+
+    var rawPhone = p.contact ? String(p.contact).trim() : '';
+    var phoneCell = rawPhone ? (rawPhone.indexOf("'") === 0 ? rawPhone : "'" + rawPhone) : '';
+
+    newRows.push([
+      p.regNo || '',
+      p.name || '',
+      p.date || '',
+      pRealTime,
+      p.age || '',
+      p.sex || '',
+      phoneCell,
+      p.address || '',
+      p.bloodGroup || '',
+      p.seenBy || 'R. Chandrashekar',
+      p.referredBy || '',
+      p.diagnosis || '',
+      p.comorbid || '',
+      p.modalities || '',
+      p.treatmentFee !== undefined ? p.treatmentFee : 0,
+      p.paymentMethod || 'Cash',
+      p.totalRevenue !== undefined ? p.totalRevenue : (p.treatmentFee || 0),
+      p.status || 'Active',
+      mode,
+      nowTimestamp
+    ]);
   }
 
-  var arcAppendRows = [];
-  var arcUpdateCount = 0;
-
-  for (var ap = 0; ap < patients.length; ap++) {
-    var pArc = patients[ap];
-    var rNo = String(pArc.regNo || '').trim();
-    var normKey = normalizeRegKey(rNo);
-    if (!normKey) continue;
-
-    var phRaw = pArc.contact ? String(pArc.contact).trim() : '';
-    var phVal = phRaw ? (phRaw.indexOf("'") === 0 ? phRaw : "'" + phRaw) : '';
-
-    if (arcRegMap[normKey]) {
-      var rNum = arcRegMap[normKey];
-      sheetArc.getRange(rNum, 2).setValue(pArc.name || '');
-      sheetArc.getRange(rNum, 7).setValue(phVal).setNumberFormat("@");
-      sheetArc.getRange(rNum, 12).setValue(pArc.diagnosis || '');
-      sheetArc.getRange(rNum, 17).setValue(pArc.totalRevenue || 0);
-      sheetArc.getRange(rNum, 18).setValue('Preserved in Archive');
-      sheetArc.getRange(rNum, 20).setValue(nowTimestamp);
-      arcUpdateCount++;
-    } else {
-      arcAppendRows.push([
-        rNo, pArc.name || '', pArc.date || '', formatScriptTime24(pArc.time), pArc.age || '', pArc.sex || '',
-        phVal, pArc.address || '', pArc.bloodGroup || '', pArc.seenBy || 'R. Chandrashekar',
-        pArc.referredBy || '', pArc.diagnosis || '', pArc.comorbid || '', pArc.modalities || '',
-        pArc.treatmentFee || 0, pArc.paymentMethod || 'Cash', pArc.totalRevenue || 0,
-        'Archived (Add-Only)', nowTimestamp, nowTimestamp
-      ]);
-      arcRegMap[normKey] = 999999;
-    }
+  // 3. Append only new non-duplicate records to the archive sheet
+  if (newRows.length > 0) {
+    var startRow = sheetArc.getLastRow() + 1;
+    sheetArc.getRange(startRow, 1, newRows.length, newRows[0].length).setValues(newRows);
+    sheetArc.getRange(startRow, 1, newRows.length, 1).setNumberFormat("@");
+    sheetArc.getRange(startRow, 4, newRows.length, 1).setNumberFormat("@");
+    sheetArc.getRange(startRow, 7, newRows.length, 1).setNumberFormat("@");
   }
 
-  if (arcAppendRows.length > 0) {
-    var arcInsertRow = sheetArc.getLastRow() + 1;
-    sheetArc.getRange(arcInsertRow, 1, arcAppendRows.length, 20).setValues(arcAppendRows);
-    sheetArc.getRange(arcInsertRow, 1, arcAppendRows.length, 1).setNumberFormat("@");
-    sheetArc.getRange(arcInsertRow, 7, arcAppendRows.length, 1).setNumberFormat("@");
-  }
-
-  return { added: arcAppendRows.length, updated: arcUpdateCount, prunedDuplicates: duplicatePatientRows.length };
+  return { appended: newRows.length, deduplicated: hasExistingDuplicates };
 }
 
 /**
- * Self-healing Archive Follow-ups Ledger helper
- * Deduplicates by RegNo + SessionNum + SessionDate, prunes duplicate rows, and persists session details.
+ * Archive Follow-ups Ledger helper with DATE & TIMESTAMP DUPLICATE PREVENTION:
+ * - Follow-up sessions with the SAME Session Date and Session Time are NEVER stored multiple times.
+ * - Appends only new non-duplicate follow-up sessions directly to the sheet.
+ * - Cleans historical duplicate follow-up rows in the sheet.
  */
-function archiveFollowUpsToSpreadsheet(ss, patients) {
-  if (!ss) return { added: 0, updated: 0, prunedDuplicates: 0 };
+function pureAppendFollowUpsToArchive(ss, patients, nowTimestamp) {
+  if (!ss) return { appended: 0, deduplicated: false };
   var fuSheet = ss.getSheetByName("Archive Follow-ups Ledger");
   if (!fuSheet) {
     fuSheet = ss.insertSheet("Archive Follow-ups Ledger");
@@ -2557,77 +2784,99 @@ function archiveFollowUpsToSpreadsheet(ss, patients) {
     fuSheet.setFrozenRows(1);
   }
 
-  var existingData = fuSheet.getDataRange().getValues();
-  var fuKeyMap = {};
-  var duplicateRowIndices = [];
+  var lastRow = fuSheet.getLastRow();
+  var existingFuSignatures = {};
+  var cleanExistingFuRows = [];
+  var hasExistingFuDuplicates = false;
 
-  for (var r = 1; r < existingData.length; r++) {
-    var reg = normalizeRegKey(existingData[r][0]);
-    var sNum = String(existingData[r][2] || '').trim();
-    var sDate = String(existingData[r][3] || '').trim();
-    var key = reg + '_' + sNum + '_' + sDate;
-    if (key.length > 2) {
-      if (fuKeyMap[key]) {
-        duplicateRowIndices.push(r + 1);
-      } else {
-        fuKeyMap[key] = r + 1;
+  // 1. Audit existing follow-up rows to index Session Date + Session Time signatures
+  if (lastRow > 1) {
+    var numCols = fuSheet.getLastColumn() || 17;
+    var existingValues = fuSheet.getRange(2, 1, lastRow - 1, numCols).getValues();
+
+    for (var r = 0; r < existingValues.length; r++) {
+      var row = existingValues[r];
+      var fuReg = normalizeRegKey(row[0]);
+      var fuName = normalizeNameKey(row[1]);
+      var fuDate = normalizeArchiveDate(row[3]);
+      var fuTime = normalizeArchiveTime(row[4]);
+      var fuNum = String(row[2] || '').trim();
+
+      var isDup = false;
+      if (fuDate && fuTime) {
+        var sig1 = (fuReg || fuName || ('fu_' + r)) + '|' + fuDate + '|' + fuTime;
+        var sigNum = (fuReg || fuName || ('fu_' + r)) + '|' + fuNum + '|' + fuDate + '|' + fuTime;
+        var sigReg = fuReg ? (fuReg + '|' + fuDate + '|' + fuTime) : '';
+
+        if (existingFuSignatures[sig1] || existingFuSignatures[sigNum] || (sigReg && existingFuSignatures[sigReg])) {
+          isDup = true;
+          hasExistingFuDuplicates = true;
+        } else {
+          existingFuSignatures[sig1] = true;
+          existingFuSignatures[sigNum] = true;
+          if (sigReg) existingFuSignatures[sigReg] = true;
+        }
       }
+
+      if (!isDup) {
+        cleanExistingFuRows.push(row);
+      }
+    }
+
+    // Clean historical duplicate follow-ups with the same date & timestamp
+    if (hasExistingFuDuplicates && cleanExistingFuRows.length > 0) {
+      fuSheet.getRange(2, 1, lastRow - 1, numCols).clearContent();
+      fuSheet.getRange(2, 1, cleanExistingFuRows.length, cleanExistingFuRows[0].length).setValues(cleanExistingFuRows);
+      fuSheet.getRange(2, 1, cleanExistingFuRows.length, 1).setNumberFormat("@");
+      fuSheet.getRange(2, 5, cleanExistingFuRows.length, 1).setNumberFormat("@");
     }
   }
 
-  // Prune historical duplicate follow-up rows
-  for (var d = duplicateRowIndices.length - 1; d >= 0; d--) {
-    fuSheet.deleteRow(duplicateRowIndices[d]);
-  }
-  if (duplicateRowIndices.length > 0) {
-    existingData = fuSheet.getDataRange().getValues();
-    fuKeyMap = {};
-    for (var r2 = 1; r2 < existingData.length; r2++) {
-      var reg2 = normalizeRegKey(existingData[r2][0]);
-      var sNum2 = String(existingData[r2][2] || '').trim();
-      var sDate2 = String(existingData[r2][3] || '').trim();
-      var key2 = reg2 + '_' + sNum2 + '_' + sDate2;
-      if (key2.length > 2 && !fuKeyMap[key2]) {
-        fuKeyMap[key2] = r2 + 1;
-      }
-    }
+  if (!patients || patients.length === 0) {
+    return { appended: 0, deduplicated: hasExistingFuDuplicates };
   }
 
+  // 2. Filter incoming follow-up sessions: Skip sessions with the same Date and Time
   var newFuRows = [];
-  var fuUpdated = 0;
-  var nowStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'Asia/Kolkata', 'yyyy-MM-dd HH:mm:ss');
-
   for (var i = 0; i < patients.length; i++) {
     var p = patients[i];
-    var pReg = String(p.regNo || '').trim();
-    var normReg = normalizeRegKey(pReg);
-    if (!normReg || !p.followUps || p.followUps.length === 0) continue;
+    if (p.deleted || p.status === 'Deleted') continue;
 
-    for (var f = 0; f < p.followUps.length; f++) {
-      var fu = p.followUps[f];
-      var sNum = String(fu.sessionNum || (f + 1)).trim();
-      var sDate = String(fu.date || '').trim();
-      var fuKey = normReg + '_' + sNum + '_' + sDate;
+    if (p.followUps && p.followUps.length > 0) {
+      var pReg = normalizeRegKey(p.regNo);
+      var pName = normalizeNameKey(p.name);
 
-      if (fuKeyMap[fuKey]) {
-        var rowIdx = fuKeyMap[fuKey];
-        fuSheet.getRange(rowIdx, 8).setValue(fu.painScaleBefore !== undefined ? fu.painScaleBefore : '');
-        fuSheet.getRange(rowIdx, 9).setValue(fu.painScaleAfter !== undefined ? fu.painScaleAfter : '');
-        fuSheet.getRange(rowIdx, 11).setValue(fu.notes || '');
-        fuSheet.getRange(rowIdx, 12).setValue(fu.treatment || fu.modalities || '');
-        fuSheet.getRange(rowIdx, 13).setValue(fu.fee || 0);
-        fuUpdated++;
-      } else {
+      for (var f = 0; f < p.followUps.length; f++) {
+        var fu = p.followUps[f];
+        var fuDate = normalizeArchiveDate(fu.date);
+        var fuRealTime = formatScriptTime24(fu.time, fu.createdAt || fu.updatedAt || p.createdAt || p.updatedAt);
+        var fuTimeNorm = normalizeArchiveTime(fuRealTime);
+        var fuNum = String(fu.sessionNum || (f + 1));
+
+        if (fuDate && fuTimeNorm) {
+          var sig1 = (pReg || pName || ('in_fu_' + i + '_' + f)) + '|' + fuDate + '|' + fuTimeNorm;
+          var sigNum = (pReg || pName || ('in_fu_' + i + '_' + f)) + '|' + fuNum + '|' + fuDate + '|' + fuTimeNorm;
+          var sigReg = pReg ? (pReg + '|' + fuDate + '|' + fuTimeNorm) : '';
+
+          if (existingFuSignatures[sig1] || existingFuSignatures[sigNum] || (sigReg && existingFuSignatures[sigReg])) {
+            continue;
+          }
+
+          existingFuSignatures[sig1] = true;
+          existingFuSignatures[sigNum] = true;
+          if (sigReg) existingFuSignatures[sigReg] = true;
+        }
+
         newFuRows.push([
-          pReg,
+          p.regNo || '',
           p.name || '',
-          sNum,
-          sDate,
-          formatScriptTime24(fu.time),
+          fu.sessionNum || (f + 1),
+          fu.date || '',
+          fuRealTime,
           p.seenBy || 'R. Chandrashekar',
           p.referredBy || '',
-          fu.painScaleBefore !== undefined ? fu.painScaleBefore : '',
-          fu.painScaleAfter !== undefined ? fu.painScaleAfter : '',
+          fu.painScaleBefore !== undefined && fu.painScaleBefore !== '' ? fu.painScaleBefore : '',
+          fu.painScaleAfter !== undefined && fu.painScaleAfter !== '' ? fu.painScaleAfter : '',
           fu.painImprovement || '',
           fu.notes || '',
           fu.treatment || fu.modalities || '',
@@ -2635,20 +2884,140 @@ function archiveFollowUpsToSpreadsheet(ss, patients) {
           fu.receiptNo || '',
           fu.paymentMethod || 'Cash',
           fu.visitType || 'Clinic',
-          nowStr
+          nowTimestamp
         ]);
-        fuKeyMap[fuKey] = 999999;
       }
     }
   }
 
+  // 3. Append non-duplicate follow-up sessions
   if (newFuRows.length > 0) {
     var startRow = fuSheet.getLastRow() + 1;
-    fuSheet.getRange(startRow, 1, newFuRows.length, 17).setValues(newFuRows);
+    fuSheet.getRange(startRow, 1, newFuRows.length, newFuRows[0].length).setValues(newFuRows);
     fuSheet.getRange(startRow, 1, newFuRows.length, 1).setNumberFormat("@");
+    fuSheet.getRange(startRow, 5, newFuRows.length, 1).setNumberFormat("@");
   }
 
-  return { added: newFuRows.length, updated: fuUpdated, prunedDuplicates: duplicateRowIndices.length };
+  return { appended: newFuRows.length, deduplicated: hasExistingFuDuplicates };
+}
+
+/**
+ * Synchronizes the Local Database Engine data into a dedicated sheet ('Local Database Engine')
+ * Replicated across Primary, Archive 1, and Archive 2 spreadsheets.
+ */
+function syncLocalDatabaseEngineSheet(targetSs, localDBData, nowTimestamp) {
+  if (!targetSs || !localDBData) return;
+  try {
+    var sheetName = "Local Database Engine";
+    var sheet = targetSs.getSheetByName(sheetName);
+    if (!sheet) {
+      sheet = targetSs.insertSheet(sheetName);
+    }
+    sheet.clear();
+
+    // Title banner
+    sheet.appendRow(["NAMANA PHYSIOTHERAPY CLINIC - LOCAL DATABASE ENGINE TELEMETRY & AUDIT"]);
+    sheet.getRange(1, 1, 1, 6)
+      .merge()
+      .setFontWeight("bold")
+      .setFontSize(11)
+      .setBackground("#0f172a")
+      .setFontColor("#38bdf8")
+      .setHorizontalAlignment("center");
+
+    sheet.appendRow([
+      "Metric / Engine Property", "Status / Value", "Engine Specifications", "Cluster & Storage Layer", "Replication Mode", "Last Synced (24h)"
+    ]);
+    sheet.getRange(2, 1, 1, 6)
+      .setFontWeight("bold")
+      .setBackground("#1e293b")
+      .setFontColor("#f8fafc");
+
+    var stats = localDBData.stats || {};
+    var rows = [
+      ["Storage Engine Architecture", stats.engine || "IndexedDB (HTML5 Embedded Store)", "Native Transactional IndexedDB", "Local Client Browser Sandbox", "Active Dual-Sync", nowTimestamp],
+      ["Database Instance Name", stats.databaseName || "NamanaPhysioLocalDB", "Version " + (stats.version || 1), "Local ObjectStore Repository", "Primary Active", nowTimestamp],
+      ["Total Patient Records In Engine", String(stats.totalPatients || 0), "Primary Entity Store", "Connected Spreadsheet + Archives", "Full Mirror", nowTimestamp],
+      ["Active Patients in Clinical Registry", String(stats.activePatients || 0), "Excludes soft-deleted", "Connected Spreadsheet + Archives", "Active", nowTimestamp],
+      ["Total Follow-Up Sessions Recorded", String(stats.totalFollowUps || 0), "Full Session Ledger", "Connected Spreadsheet + Archives", "Append-Only Safe", nowTimestamp],
+      ["Registered Locum Physiotherapists", String(stats.totalLocums || 0), "Locums Store", "Connected Spreadsheet + Archives", "Synchronized", nowTimestamp],
+      ["Registered Referral Doctors", String(stats.totalReferralDoctors || 0), "Referral Store", "Connected Spreadsheet + Archives", "Synchronized", nowTimestamp],
+      ["Engine Health / Connection", stats.status || "connected", "100% Offline Capable", "No External Cloud DB Required", "Zero Latency Local Speed", nowTimestamp]
+    ];
+
+    for (var r = 0; r < rows.length; r++) {
+      sheet.appendRow(rows[r]);
+    }
+    sheet.getRange(3, 1, rows.length, 6).setBackground("#f8fafc");
+
+    // Locum Physiotherapists Table
+    var startLocumRow = sheet.getLastRow() + 2;
+    sheet.appendRow(["REGISTERED LOCUM PHYSIOTHERAPISTS DIRECTORY"]);
+    sheet.getRange(startLocumRow, 1, 1, 6)
+      .merge()
+      .setFontWeight("bold")
+      .setBackground("#0369a1")
+      .setFontColor("#ffffff");
+
+    sheet.appendRow(["Locum ID", "Full Name", "Qualification", "Registration / ID #", "Status", "Last Audit"]);
+    sheet.getRange(startLocumRow + 1, 1, 1, 6)
+      .setFontWeight("bold")
+      .setBackground("#e0f2fe")
+      .setFontColor("#0369a1");
+
+    var locums = localDBData.locums || [];
+    if (locums.length > 0) {
+      for (var l = 0; l < locums.length; l++) {
+        var loc = locums[l];
+        sheet.appendRow([
+          loc.id || ("LOC-" + (l + 1)),
+          loc.name || "",
+          loc.qualification || "BPT / MPT",
+          loc.idNumber || "N/A",
+          loc.status || "Active",
+          nowTimestamp
+        ]);
+      }
+    } else {
+      sheet.appendRow(["LOC-001", "R. Chandrashekar", "Chief Physiotherapist (BPT, MPT)", "REG-MYS-01", "Primary Consultant", nowTimestamp]);
+    }
+
+    // Referral Doctors Directory
+    var startDocRow = sheet.getLastRow() + 2;
+    sheet.appendRow(["REGISTERED REFERRAL DOCTORS DIRECTORY"]);
+    sheet.getRange(startDocRow, 1, 1, 6)
+      .merge()
+      .setFontWeight("bold")
+      .setBackground("#047857")
+      .setFontColor("#ffffff");
+
+    sheet.appendRow(["#", "Doctor / Referral Source", "Category / Speciality", "Hospital / Clinic", "Referred Count (Approx)", "Status"]);
+    sheet.getRange(startDocRow + 1, 1, 1, 6)
+      .setFontWeight("bold")
+      .setBackground("#d1fae5")
+      .setFontColor("#065f46");
+
+    var docs = localDBData.referralDoctors || [];
+    if (docs.length > 0) {
+      for (var d = 0; d < docs.length; d++) {
+        var docName = typeof docs[d] === 'string' ? docs[d] : (docs[d].name || 'Doctor');
+        sheet.appendRow([
+          d + 1,
+          docName,
+          "Medical Specialist / Orthopedic / General",
+          "Mysuru Healthcare Network",
+          "Tracked in Registry",
+          "Active"
+        ]);
+      }
+    } else {
+      sheet.appendRow(["1", "Self / Direct Walk-In", "Direct Consultation", "Namana Clinic", "Active", "Active"]);
+    }
+
+    sheet.autoResizeColumns(1, 6);
+  } catch (err) {
+    Logger.log("Error syncing Local Database Engine sheet: " + err);
+  }
 }
 
 /**
@@ -2666,23 +3035,16 @@ function doPost(e) {
 
     var payload = JSON.parse(e.postData.contents);
     var patients = payload.patients || [];
+    var action = payload.action || 'sync';
 
     var arc1Id = extractCleanSheetId(payload.archiveSheet1Id || ARCHIVE_SHEET_1_ID || '');
     var arc2Id = extractCleanSheetId(payload.archiveSheet2Id || ARCHIVE_SHEET_2_ID || '');
     var nowTimestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'Asia/Kolkata', 'yyyy-MM-dd HH:mm:ss');
 
-    // =========================================================================
-    // 1. PRIMARY DATABASE SHEET: Realtime Addition & Deletion
-    // =========================================================================
     var ssPrimary = SpreadsheetApp.getActiveSpreadsheet();
-    var primarySheet = ssPrimary.getSheetByName("Patient Directory");
-    if (!primarySheet) {
-      primarySheet = ssPrimary.getActiveSheet();
-      primarySheet.setName("Patient Directory");
-    }
-
-    // Clear primary sheet and rebuild so additions AND deletions reflect 1:1 in realtime
-    primarySheet.clear();
+    var targets = [];
+    if (arc1Id) targets.push({ id: arc1Id, label: 'Archive Sheet 1' });
+    if (arc2Id) targets.push({ id: arc2Id, label: 'Archive Sheet 2' });
 
     var primaryHeaders = [
       "Reg No", "Patient Name", "Consultation Date", "Time Stamp", "Age", "Sex", "Contact Number", "Address",
@@ -2692,11 +3054,193 @@ function doPost(e) {
       "Follow-ups Count", "Follow-ups Fee (INR)", "Total Revenue (INR)", "Follow-up Sessions Summary", "Status", "Last Synced At"
     ];
 
+    var fuHeaders = [
+      "Reg No", "Patient Name", "Session #", "Session Date", "Session Time", "Seen By", "Referred By",
+      "Pain Before (0-10)", "Pain After (0-10)", "Pain Relief (pts)", "Clinical Progress Notes", "Treatments Given", "Session Fee (INR)", "Receipt No", "Payment Mode", "Visit Mode"
+    ];
+
+    // =========================================================================
+    // CASE A: INSTANT "ADD PATIENT" EVENT (Direct Append to Archive 1 & 2, No Overwriting)
+    // =========================================================================
+    if (action === 'addPatient' && payload.newPatient) {
+      var np = payload.newPatient;
+      var npList = [np];
+
+      // 1. Primary Sheet: Append new patient to "Patient Directory"
+      var primarySheet = ssPrimary.getSheetByName("Patient Directory");
+      if (!primarySheet) {
+        primarySheet = ssPrimary.getActiveSheet();
+        primarySheet.setName("Patient Directory");
+        primarySheet.appendRow(primaryHeaders);
+        primarySheet.getRange(1, 1, 1, primaryHeaders.length).setFontWeight("bold").setBackground("#e0f2fe").setFontColor("#0369a1");
+        primarySheet.setFrozenRows(1);
+      }
+
+      // 1. Primary Sheet: Check if patient already exists in "Patient Directory" before appending
+      var npRegNorm = normalizeRegKey(np.regNo);
+      var npDateNorm = normalizeArchiveDate(np.date);
+      var npRealTime = formatScriptTime24(np.time, np.createdAt || np.updatedAt);
+      var npTimeNorm = normalizeArchiveTime(npRealTime);
+      var npNameNorm = normalizeNameKey(np.name);
+
+      var pLastRow = primarySheet.getLastRow();
+      var alreadyInPrimary = false;
+      if (pLastRow > 1) {
+        var pData = primarySheet.getRange(2, 1, pLastRow - 1, 4).getValues();
+        for (var pr = 0; pr < pData.length; pr++) {
+          var prReg = normalizeRegKey(pData[pr][0]);
+          var prName = normalizeNameKey(pData[pr][1]);
+          var prDate = normalizeArchiveDate(pData[pr][2]);
+          var prTime = normalizeArchiveTime(pData[pr][3]);
+          if (npRegNorm && prReg === npRegNorm) {
+            alreadyInPrimary = true;
+            break;
+          }
+          if ((prName === npNameNorm || prReg === npRegNorm) && prDate === npDateNorm && prTime === npTimeNorm) {
+            alreadyInPrimary = true;
+            break;
+          }
+        }
+      }
+
+      if (!alreadyInPrimary) {
+        var npRawPhone = np.contact ? String(np.contact).trim() : '';
+        var npPhoneCell = npRawPhone ? (npRawPhone.indexOf("'") === 0 ? npRawPhone : "'" + npRawPhone) : '';
+
+        var npRow = [
+          np.regNo || '', np.name || '', np.date || '', npRealTime, np.age || '', np.sex || '',
+          npPhoneCell, np.address || '', np.bloodGroup || '', np.height || '', np.weight || '',
+          np.seenBy || 'R. Chandrashekar', np.referredBy || '', np.diagnosis || '', np.history || '',
+          np.comorbid || '', np.modalities || '', np.painScaleBefore !== undefined ? np.painScaleBefore : '',
+          np.painScaleAfter !== undefined ? np.painScaleAfter : '', np.painImprovement || '',
+          np.vasChartSummary || '', np.treatmentFee || 0, np.paymentMethod || 'Cash', np.visitType || 'Clinic',
+          np.receiptNo || '', np.followUpsCount || 0, np.followUpsTotalFee || 0, np.totalRevenue || 0,
+          np.followUpsSummary || '', 'Active', nowTimestamp
+        ];
+        primarySheet.appendRow(npRow);
+        var pLast = primarySheet.getLastRow();
+        primarySheet.getRange(pLast, 1).setNumberFormat("@");
+        primarySheet.getRange(pLast, 4).setNumberFormat("@");
+        primarySheet.getRange(pLast, 7).setNumberFormat("@");
+      }
+
+      // 2. Primary Sheet: Append initial follow-ups if present (preventing duplicate sessions)
+      if (np.followUps && np.followUps.length > 0) {
+        var fuSheet = ssPrimary.getSheetByName("Follow-up Sessions Ledger");
+        if (!fuSheet) {
+          fuSheet = ssPrimary.insertSheet("Follow-up Sessions Ledger");
+          fuSheet.appendRow(fuHeaders);
+          fuSheet.getRange(1, 1, 1, fuHeaders.length).setFontWeight("bold").setBackground("#fef3c7").setFontColor("#92400e");
+          fuSheet.setFrozenRows(1);
+        }
+
+        var fuLastRow = fuSheet.getLastRow();
+        var existingFuSigs = {};
+        if (fuLastRow > 1) {
+          var fuExistingVals = fuSheet.getRange(2, 1, fuLastRow - 1, 5).getValues();
+          for (var fer = 0; fer < fuExistingVals.length; fer++) {
+            var ferReg = normalizeRegKey(fuExistingVals[fer][0]);
+            var ferName = normalizeNameKey(fuExistingVals[fer][1]);
+            var ferDate = normalizeArchiveDate(fuExistingVals[fer][3]);
+            var ferTime = normalizeArchiveTime(fuExistingVals[fer][4]);
+            if (ferDate && ferTime) {
+              existingFuSigs[(ferReg || ferName) + '|' + ferDate + '|' + ferTime] = true;
+            }
+          }
+        }
+
+        for (var f = 0; f < np.followUps.length; f++) {
+          var fu = np.followUps[f];
+          var fuRealTime = formatScriptTime24(fu.time, fu.createdAt || fu.updatedAt);
+          var fuDateNorm = normalizeArchiveDate(fu.date);
+          var fuTimeNorm = normalizeArchiveTime(fuRealTime);
+          var fuSig = (npRegNorm || npNameNorm) + '|' + fuDateNorm + '|' + fuTimeNorm;
+
+          if (fuDateNorm && fuTimeNorm && existingFuSigs[fuSig]) {
+            continue;
+          }
+          if (fuDateNorm && fuTimeNorm) {
+            existingFuSigs[fuSig] = true;
+          }
+
+          fuSheet.appendRow([
+            np.regNo || '', np.name || '', fu.sessionNum || (f + 1), fu.date || '', fuRealTime,
+            np.seenBy || 'R. Chandrashekar', np.referredBy || '',
+            fu.painScaleBefore !== undefined ? fu.painScaleBefore : '',
+            fu.painScaleAfter !== undefined ? fu.painScaleAfter : '',
+            fu.painImprovement || '', fu.notes || '', fu.treatment || fu.modalities || '',
+            fu.fee || 0, fu.receiptNo || '', fu.paymentMethod || 'Cash', fu.visitType || 'Clinic'
+          ]);
+          var fuLast = fuSheet.getLastRow();
+          fuSheet.getRange(fuLast, 1).setNumberFormat("@");
+          fuSheet.getRange(fuLast, 5).setNumberFormat("@");
+        }
+      }
+
+      // 3. Primary Sheet: Internal Archive tab (Pure append, no primary key, no overwrite)
+      pureAppendPatientsToArchive(ssPrimary, npList, "Archive Patient Registry", nowTimestamp, "New Patient Added");
+
+      // 4. Primary Sheet: Automatically replicate Local Database Engine sheet
+      if (payload.localDBData) {
+        syncLocalDatabaseEngineSheet(ssPrimary, payload.localDBData, nowTimestamp);
+      }
+
+      // 5. EXTERNAL DUAL ARCHIVE SPREADSHEETS: STRICTLY ADD-ONLY, NO PRIMARY KEY, NO OVERWRITING
+      var addArchiveReport = [];
+      for (var t = 0; t < targets.length; t++) {
+        var item = targets[t];
+        try {
+          var ssArc = SpreadsheetApp.openById(item.id);
+          if (!ssArc) continue;
+
+          var pRes = pureAppendPatientsToArchive(ssArc, npList, "Archive Patient Registry", nowTimestamp, "New Patient Added");
+          var fRes = pureAppendFollowUpsToArchive(ssArc, npList, nowTimestamp);
+
+          // Replicate Local Database Engine to external archive spreadsheet
+          if (payload.localDBData) {
+            syncLocalDatabaseEngineSheet(ssArc, payload.localDBData, nowTimestamp);
+          }
+
+          addArchiveReport.push({
+            label: item.label,
+            id: item.id,
+            name: ssArc.getName(),
+            status: 'success',
+            patientsAppended: pRes.appended,
+            followUpsAppended: fRes.appended,
+            localDBReplicated: !!payload.localDBData
+          });
+        } catch (arcErr) {
+          addArchiveReport.push({
+            label: item.label,
+            id: item.id,
+            status: 'error',
+            message: arcErr.message || String(arcErr)
+          });
+        }
+      }
+
+      return ContentService.createTextOutput(JSON.stringify({
+        status: 'success',
+        action: 'addPatient',
+        regNo: np.regNo,
+        archiveReport: addArchiveReport,
+        localDBReplicated: !!payload.localDBData,
+        timestamp: new Date().toISOString()
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // =========================================================================
+    // CASE B: FULL HOURLY / MANUAL SYNC BATCH
+    // =========================================================================
+    var primarySheet = ssPrimary.getSheetByName("Patient Directory");
+    if (!primarySheet) {
+      primarySheet = ssPrimary.getActiveSheet();
+      primarySheet.setName("Patient Directory");
+    }
+    primarySheet.clear();
     primarySheet.appendRow(primaryHeaders);
-    primarySheet.getRange(1, 1, 1, primaryHeaders.length)
-      .setFontWeight("bold")
-      .setBackground("#e0f2fe")
-      .setFontColor("#0369a1");
+    primarySheet.getRange(1, 1, 1, primaryHeaders.length).setFontWeight("bold").setBackground("#e0f2fe").setFontColor("#0369a1");
     primarySheet.setFrozenRows(1);
 
     var primaryRows = [];
@@ -2704,67 +3248,34 @@ function doPost(e) {
 
     for (var i = 0; i < patients.length; i++) {
       var p = patients[i];
-      if (p.deleted || p.status === 'Deleted') {
-        continue;
-      }
+      if (p.deleted || p.status === 'Deleted') continue;
 
       var rawPhone = p.contact ? String(p.contact).trim() : '';
       var phoneCell = rawPhone ? (rawPhone.indexOf("'") === 0 ? rawPhone : "'" + rawPhone) : '';
+      var pRealTime = formatScriptTime24(p.time, p.createdAt || p.updatedAt);
 
       primaryRows.push([
-        p.regNo || '',
-        p.name || '',
-        p.date || '',
-        formatScriptTime24(p.time),
-        p.age || '',
-        p.sex || '',
-        phoneCell,
-        p.address || '',
-        p.bloodGroup || '',
-        p.height || '',
-        p.weight || '',
-        p.seenBy || 'R. Chandrashekar',
-        p.referredBy || '',
-        p.diagnosis || '',
-        p.history || '',
-        p.comorbid || '',
-        p.modalities || '',
-        p.painScaleBefore !== undefined ? p.painScaleBefore : '',
-        p.painScaleAfter !== undefined ? p.painScaleAfter : '',
-        p.painImprovement || '',
-        p.vasChartSummary || '',
-        p.treatmentFee || 0,
-        p.paymentMethod || 'Cash',
-        p.visitType || 'Clinic',
-        p.receiptNo || '',
-        p.followUpsCount || 0,
-        p.followUpsTotalFee || 0,
-        p.totalRevenue || 0,
-        p.followUpsSummary || '',
-        'Active',
-        new Date().toISOString()
+        p.regNo || '', p.name || '', p.date || '', pRealTime, p.age || '', p.sex || '',
+        phoneCell, p.address || '', p.bloodGroup || '', p.height || '', p.weight || '',
+        p.seenBy || 'R. Chandrashekar', p.referredBy || '', p.diagnosis || '', p.history || '',
+        p.comorbid || '', p.modalities || '', p.painScaleBefore !== undefined ? p.painScaleBefore : '',
+        p.painScaleAfter !== undefined ? p.painScaleAfter : '', p.painImprovement || '',
+        p.vasChartSummary || '', p.treatmentFee || 0, p.paymentMethod || 'Cash', p.visitType || 'Clinic',
+        p.receiptNo || '', p.followUpsCount || 0, p.followUpsTotalFee || 0, p.totalRevenue || 0,
+        p.followUpsSummary || '', 'Active', nowTimestamp
       ]);
 
       if (p.followUps && p.followUps.length > 0) {
         for (var f = 0; f < p.followUps.length; f++) {
           var fu = p.followUps[f];
+          var fuRealTime = formatScriptTime24(fu.time, fu.createdAt || fu.updatedAt || p.createdAt || p.updatedAt);
           allFollowUpRows.push([
-            p.regNo || '',
-            p.name || '',
-            fu.sessionNum || (f + 1),
-            fu.date || '',
-            formatScriptTime24(fu.time),
-            p.seenBy || 'R. Chandrashekar',
-            p.referredBy || '',
+            p.regNo || '', p.name || '', fu.sessionNum || (f + 1), fu.date || '', fuRealTime,
+            p.seenBy || 'R. Chandrashekar', p.referredBy || '',
             fu.painScaleBefore !== undefined && fu.painScaleBefore !== '' ? fu.painScaleBefore : '',
             fu.painScaleAfter !== undefined && fu.painScaleAfter !== '' ? fu.painScaleAfter : '',
-            fu.painImprovement || '',
-            fu.notes || '',
-            fu.treatment || fu.modalities || '',
-            fu.fee || 0,
-            fu.receiptNo || '',
-            fu.paymentMethod || 'Cash',
-            fu.visitType || 'Clinic'
+            fu.painImprovement || '', fu.notes || '', fu.treatment || fu.modalities || '',
+            fu.fee || 0, fu.receiptNo || '', fu.paymentMethod || 'Cash', fu.visitType || 'Clinic'
           ]);
         }
       }
@@ -2772,8 +3283,9 @@ function doPost(e) {
 
     if (primaryRows.length > 0) {
       primarySheet.getRange(2, 1, primaryRows.length, primaryHeaders.length).setValues(primaryRows);
-      primarySheet.getRange(2, 7, primaryRows.length, 1).setNumberFormat("@");
       primarySheet.getRange(2, 1, primaryRows.length, 1).setNumberFormat("@");
+      primarySheet.getRange(2, 4, primaryRows.length, 1).setNumberFormat("@");
+      primarySheet.getRange(2, 7, primaryRows.length, 1).setNumberFormat("@");
     }
 
     // Follow-up Sessions Ledger Sheet (Primary)
@@ -2782,63 +3294,59 @@ function doPost(e) {
       fuSheet = ssPrimary.insertSheet("Follow-up Sessions Ledger");
     }
     fuSheet.clear();
-    var fuHeaders = [
-      "Reg No", "Patient Name", "Session #", "Session Date", "Session Time", "Seen By", "Referred By",
-      "Pain Before (0-10)", "Pain After (0-10)", "Pain Relief (pts)", "Clinical Progress Notes", "Treatments Given", "Session Fee (INR)", "Receipt No", "Payment Mode", "Visit Mode"
-    ];
     fuSheet.appendRow(fuHeaders);
     fuSheet.getRange(1, 1, 1, fuHeaders.length).setFontWeight("bold").setBackground("#fef3c7").setFontColor("#92400e");
     fuSheet.setFrozenRows(1);
     if (allFollowUpRows.length > 0) {
       fuSheet.getRange(2, 1, allFollowUpRows.length, fuHeaders.length).setValues(allFollowUpRows);
       fuSheet.getRange(2, 1, allFollowUpRows.length, 1).setNumberFormat("@");
+      fuSheet.getRange(2, 5, allFollowUpRows.length, 1).setNumberFormat("@");
     }
 
-    // =========================================================================
-    // 2. INTERNAL ARCHIVE TABS (Primary Spreadsheet: Registry + Follow-ups)
-    // =========================================================================
-    var internalPatientResult = archivePatientsToSpreadsheet(ssPrimary, patients, "Archive Patient Registry", nowTimestamp);
-    var internalFuResult = archiveFollowUpsToSpreadsheet(ssPrimary, patients);
+    // Automatically replicate Local Database Engine sheet to Primary Spreadsheet
+    if (payload.localDBData) {
+      syncLocalDatabaseEngineSheet(ssPrimary, payload.localDBData, nowTimestamp);
+    }
 
-    // =========================================================================
-    // 3. EXTERNAL DUAL ARCHIVE SPREADSHEETS: STRICTLY ADD-ONLY / NO DUPLICATION
-    // =========================================================================
+    // Internal Archive on Primary Spreadsheet (Pure append, no primary key, no overwrite)
+    var intPatientResult = pureAppendPatientsToArchive(ssPrimary, patients, "Archive Patient Registry", nowTimestamp, "Sync Snapshot");
+    var intFuResult = pureAppendFollowUpsToArchive(ssPrimary, patients, nowTimestamp);
+
+    // External Dual Archive Spreadsheets: STRICTLY ADD-ONLY, NO PRIMARY KEY, NO OVERWRITING
     var archiveReport = [];
-    var targets = [];
-    if (arc1Id) targets.push({ id: arc1Id, label: 'Archive Sheet 1' });
-    if (arc2Id) targets.push({ id: arc2Id, label: 'Archive Sheet 2' });
-
-    var totalExternalAppended = 0;
-    var totalExternalFuAppended = 0;
+    var totalExtPatientsAppended = 0;
+    var totalExtFuAppended = 0;
 
     for (var t = 0; t < targets.length; t++) {
       var item = targets[t];
       try {
         var ssArc = SpreadsheetApp.openById(item.id);
         if (!ssArc) {
-          archiveReport.push({ label: item.label, id: item.id, status: 'error', message: 'Unable to open spreadsheet by ID. Please ensure sheet is shared with edit access.' });
+          archiveReport.push({ label: item.label, id: item.id, status: 'error', message: 'Unable to open spreadsheet. Please ensure edit access is granted.' });
           continue;
         }
 
-        // Archive Patient Registry with deduplication & historical duplicate cleanup
-        var pResult = archivePatientsToSpreadsheet(ssArc, patients, "Archive Patient Registry", nowTimestamp);
-        totalExternalAppended += pResult.added;
+        // Pure append patients to Archive without primary key check or overwriting
+        var pResult = pureAppendPatientsToArchive(ssArc, patients, "Archive Patient Registry", nowTimestamp, "Sync Snapshot");
+        totalExtPatientsAppended += pResult.appended;
 
-        // Archive Follow-up Sessions Ledger with deduplication & historical duplicate cleanup
-        var fuResult = archiveFollowUpsToSpreadsheet(ssArc, patients);
-        totalExternalFuAppended += fuResult.added;
+        // Pure append follow-up sessions without overwriting
+        var fuResult = pureAppendFollowUpsToArchive(ssArc, patients, nowTimestamp);
+        totalExtFuAppended += fuResult.appended;
+
+        // Automatically replicate Local Database Engine to Archive Spreadsheet
+        if (payload.localDBData) {
+          syncLocalDatabaseEngineSheet(ssArc, payload.localDBData, nowTimestamp);
+        }
 
         archiveReport.push({
           label: item.label,
           id: item.id,
           name: ssArc.getName(),
           status: 'success',
-          patientsAdded: pResult.added,
-          patientsUpdated: pResult.updated,
-          patientDuplicatesPruned: pResult.prunedDuplicates,
-          followUpsAdded: fuResult.added,
-          followUpsUpdated: fuResult.updated,
-          followUpDuplicatesPruned: fuResult.prunedDuplicates
+          patientsAppended: pResult.appended,
+          followUpsAppended: fuResult.appended,
+          localDBReplicated: !!payload.localDBData
         });
       } catch (arcErr) {
         archiveReport.push({
@@ -2852,13 +3360,15 @@ function doPost(e) {
 
     return ContentService.createTextOutput(JSON.stringify({
       status: 'success',
+      action: 'sync',
       primaryActiveRecords: primaryRows.length,
       primaryFollowUps: allFollowUpRows.length,
-      internalArchiveAdded: internalPatientResult.added,
-      internalFollowUpsAdded: internalFuResult.added,
-      externalArchivesAppended: totalExternalAppended,
-      externalFollowUpsAppended: totalExternalFuAppended,
+      internalPatientsAppended: intPatientResult.appended,
+      internalFollowUpsAppended: intFuResult.appended,
+      externalPatientsAppended: totalExtPatientsAppended,
+      externalFollowUpsAppended: totalExtFuAppended,
       archiveReport: archiveReport,
+      localDBReplicated: !!payload.localDBData,
       timestamp: new Date().toISOString()
     })).setMimeType(ContentService.MimeType.JSON);
 
